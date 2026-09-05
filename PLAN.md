@@ -2,7 +2,7 @@
 
 **Owner:** Will McCann
 **For:** Build with Claude meetup, Saturday 2026-09-05
-**Status:** Revision 2, drafted 2026-09-04 with Claude Code
+**Status:** Revision 3, drafted 2026-09-04 with Claude Code
 **Project folder:** ~/projects/voice-slack-agent
 **Goal of this document:** a plan I could start building from Monday morning, and a story I can tell a room of first-time agent builders on Saturday.
 
@@ -20,7 +20,7 @@
 
 **Version 1** adds write tools (Trello card, journal doc, reminder) with an ask-first rule for anything with a date. **Version 2** replaces the hourly poll with an AWS Lambda so the memo is handled in seconds. The agent's logic does not change between versions; only where it runs does.
 
-**Process.** Two revisions on 2026-09-04, driven by four rounds of questions in Claude Code. Most of the revision was about what the agent is allowed to do, not how to build it.
+**Process.** Three revisions on 2026-09-04, driven by four rounds of questions in Claude Code. Revision 3 was entirely about privacy and secrets. Most of the revision was about what the agent is allowed to do, not how to build it.
 
 ---
 
@@ -172,7 +172,7 @@ Memo 10 tests the health-versus-journal rule. Memo 7 is the other interesting on
 - I brought one idea and it was not an agent yet. Adding one decision made it one.
 - I did not build any infrastructure. The first version is a scheduled task and a spreadsheet.
 - I gave it read tools first and one write tool. It earns write tools by being right for a week.
-- The plan took two revisions before Saturday (see log). The revisions were mostly about *what it should be allowed to do*, not how to build it.
+- The plan took three revisions before Saturday (see log). The third was about what the agent must never do with my data, which is the revision I did not expect to need. The revisions were mostly about *what it should be allowed to do*, not how to build it.
 
 ---
 
@@ -182,3 +182,4 @@ Memo 10 tests the health-versus-journal rule. Memo 7 is the other interesting on
 | --- | --- | --- | --- |
 | 1 | 2026-09-04 | First full draft | Discovery answered: memo router, webhook app in text mode, scheduled task v0, Slack DM output. Reframed from pipeline to agent. |
 | 2 | 2026-09-04 | Added the health route, a one-page summary, two test memos, and the cloud-routine constraint | Second round of questions: confirmed propose-only autonomy for v0, five routes instead of four, cloud phase stays one section, and the file should double as the meetup handout. |
+| 3 | 2026-09-04 | Data and secrets precautions added to CLAUDE.md (15 numbered rules) with enforcement: Read deny rules for .env, a Bash guard hook, and gitleaks on pre-commit | Memos are personal and some are health-related; the webhook is a public entry point. Guidance and enforcement are separated on purpose. |
