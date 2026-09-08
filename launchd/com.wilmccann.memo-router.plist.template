@@ -9,6 +9,10 @@
   StartInterval rather than StartCalendarInterval because launchd then runs a
   missed interval when the Mac wakes, instead of skipping it. RunAtLoad is
   false so installing it does not immediately fire a run.
+
+  The interval is four minutes by default. Each firing is a cheap check of
+  the Sheet (see the precheck in bin/process-memos.sh); the agent itself only
+  launches when that check finds a row waiting.
 -->
 <plist version="1.0">
 <dict>

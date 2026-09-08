@@ -22,6 +22,7 @@ tools by being right for a week.
 | `mcp/slack-server.js` | The one write tool: a DM to one person, enforced at the tool boundary. |
 | `prompts/process-new-memos.md` | **The agent.** Routing rules, run procedure, DM format, and the list of things it must never do. |
 | `bin/process-memos.sh` | One run: take the lock, run the agent with exactly five tools, write one log line. |
+| `bin/uninstall-launchagent.sh` | Remove the timer. The Sheet, the deployment and the logs are left alone. |
 | `bin/install-launchagent.sh` | Installs the fifteen-minute timer. |
 | `bin/check.sh` | Runs everything that can be checked without deploying. |
 | `fixtures/test-set.json` | The twelve routing cases from `SPEC.md` section 7, synthetic. Case 13 tests the receiver instead. |
@@ -75,12 +76,16 @@ bin/process-memos.sh --verbose
 bin/install-launchagent.sh
 ```
 
+It fires every 4 minutes (`--interval 60` for once a minute). Each firing asks the
+Sheet, through the sheet server, whether any row is waiting, and only then launches
+the agent, so an idle firing costs one small request and no tokens.
 `bin/install-launchagent.sh --status` says whether it is loaded and shows the last few
-runs. `--uninstall` stops it and touches nothing else.
+runs. `bin/uninstall-launchagent.sh` stops it and touches nothing else.
+`bin/process-memos.sh --force` runs the agent without the check.
 
 ## Watching it
 
-`logs/runs.log` gets one line per run: a timestamp, a run id, an exit code, a
+`logs/runs.log` gets one line per agent run (an empty poll writes nothing): a timestamp, a run id, an exit code, a
 duration, how many memos were done, asked about, errored or skipped, and what the run would
 have cost at API rates (`cost_usd`, for deciding whether the agent can move off the
 subscription). No memo text, ever

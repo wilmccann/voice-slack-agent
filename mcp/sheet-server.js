@@ -18,6 +18,13 @@
 //   3     the URL is itself a secret, so failures say "the web app".
 //   5     three tools, one Sheet, no other reach.
 //   11    stderr carries ids, counts and outcomes, never transcript text.
+//
+// Also a command-line mode, for bin/process-memos.sh:
+//   node mcp/sheet-server.js --pending
+// prints one number, how many rows a claim would take right now, and exits.
+// The wrapper cannot ask the web app itself without loading the dotenv file
+// into a shell (rule 2), so it asks this process, which already holds the
+// credentials and prints nothing but the count.
 
 'use strict';
 
@@ -262,13 +269,39 @@ async function call(name, a) {
   throw new Error(`Unknown tool: ${name}`);
 }
 
-serve({
-  name: SERVER_NAME,
-  version: SERVER_VERSION,
-  tools: TOOLS,
-  call,
-  ready: () => {
-    const problem = configProblem();
-    return problem ? { configured: false, problem } : { configured: true };
-  },
-});
+/* ---------------------------------------------------------- --pending mode */
+
+async function printPending() {
+  const data = await callWebApp('ping');
+  let pending = data.pending;
+  if (typeof pending !== 'number') {
+    // A deployment from before ping reported it: count what claim might take,
+    // erring towards a run. A processing row that is not yet stale costs one
+    // agent launch that finds nothing, which is the price of the older script.
+    const s = data.status || {};
+    pending = (s.new || 0) + (s.error || 0) + (s.processing || 0);
+  }
+  process.stdout.write(String(pending) + '\n');
+}
+
+if (process.argv.includes('--pending')) {
+  printPending().then(
+    () => process.exit(0),
+    (err) => {
+      // Rule 3: the message names "the web app", never the URL.
+      process.stderr.write(`pending check failed: ${err.message}\n`);
+      process.exit(1);
+    },
+  );
+} else {
+  serve({
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
+    tools: TOOLS,
+    call,
+    ready: () => {
+      const problem = configProblem();
+      return problem ? { configured: false, problem } : { configured: true };
+    },
+  });
+}

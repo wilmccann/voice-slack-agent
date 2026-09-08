@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # One run of the Memo Router. SPEC.md section 4.1.
 #
-# Called by the LaunchAgent every 15 minutes, and safe to run by hand. Takes a
-# lock so two runs never overlap, runs the agent with exactly the tools SPEC.md
-# 5.2 allows, and appends one line to logs/runs.log.
+# Called by the LaunchAgent every 4 minutes, and safe to run by hand. Takes a
+# lock so two runs never overlap, asks the Sheet whether there is anything to
+# do, and only then runs the agent with exactly the tools SPEC.md 5.2 allows
+# and appends one line to logs/runs.log.
+#
+# The precheck is what makes a short timer affordable: it is one small
+# HTTPS request through mcp/sheet-server.js --pending, no model call, and it
+# writes nothing to the log when the answer is zero. The agent, which costs a
+# process start and tokens every time, only launches when a row is waiting.
 #
 # Rules (CLAUDE.md):
 #   2   this script never loads the dotenv file into its own environment. The
@@ -17,6 +23,7 @@
 # Usage:
 #   bin/process-memos.sh              one run, quiet unless something is wrong
 #   bin/process-memos.sh --verbose    also print the run line and the agent's output
+#   bin/process-memos.sh --force      skip the precheck and run the agent regardless
 #   bin/process-memos.sh --dry-run    show the command that would run, run nothing
 
 set -uo pipefail
@@ -33,11 +40,13 @@ MAX_TURNS=40
 
 VERBOSE=0
 DRY_RUN=0
+FORCE=0
 for arg in "$@"; do
   case "$arg" in
     --verbose|-v) VERBOSE=1 ;;
     --dry-run|-n) DRY_RUN=1 ;;
-    --help|-h) sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;
+    --force|-f) FORCE=1 ;;
+    --help|-h) sed -n '2,27p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;
     *) echo "Unknown argument: $arg" >&2; exit 2 ;;
   esac
 done
@@ -84,6 +93,28 @@ if ! mkdir "$LOCK_DIR" 2>/dev/null; then
 fi
 trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 
+# --------------------------------------------------------------- the precheck
+# One request to the web app's ping action, made by the sheet server so that no
+# credential enters this shell (rule 2). It answers with the number of rows a
+# claim would take. Zero means exit now, silently: at hundreds of polls a day,
+# logging every empty one would bury the lines that matter. A failed check is logged
+# once per occurrence and treated as "nothing to do"; the next minute tries
+# again, and a row is never lost by waiting.
+if [ "$FORCE" != "1" ] && [ "$DRY_RUN" != "1" ]; then
+  PENDING="$(node "$ROOT/mcp/sheet-server.js" --pending 2>"$LOG_DIR/last-ping.stderr")"
+  PING_STATUS=$?
+  if [ "$PING_STATUS" -ne 0 ] || ! [[ "$PENDING" =~ ^[0-9]+$ ]]; then
+    log_line "{\"t\":\"$(date -u +%FT%TZ)\",\"event\":\"ping_failed\",\"exit\":$PING_STATUS}"
+    [ "$VERBOSE" = "1" ] && echo "precheck failed; see $LOG_DIR/last-ping.stderr" >&2
+    exit 0
+  fi
+  if [ "$PENDING" -eq 0 ]; then
+    [ "$VERBOSE" = "1" ] && echo "nothing pending; not launching the agent"
+    exit 0
+  fi
+  [ "$VERBOSE" = "1" ] && echo "$PENDING pending; launching the agent"
+fi
+
 # ------------------------------------------------------------------ the tools
 # SPEC.md 5.2, exactly. Three things narrow the surface, and all three are
 # needed:
@@ -107,7 +138,9 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
 STARTED="$(date +%s)"
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "would run:"
+  echo "would first check:"
+  echo "  node mcp/sheet-server.js --pending    (and stop here if it prints 0)"
+  echo "then run:"
   echo "  claude -p \"\$(cat prompts/process-new-memos.md)\" \\"
   echo "    --output-format json --max-turns $MAX_TURNS \\"
   echo "    --mcp-config .mcp.json --strict-mcp-config \\"

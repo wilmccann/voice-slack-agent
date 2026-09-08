@@ -246,18 +246,19 @@ Health DMs never include a comparison to anything outside the Sheet, and are nev
 
 ## 4. Trigger mechanism: how the agent learns a memo exists
 
-### 4.1 Version 0, primary: local launchd poll every 15 minutes
+### 4.1 Version 0, primary: local launchd poll ~~every 15 minutes~~ every 4 minutes, agent only when a row is waiting
 
-- A LaunchAgent plist at `~/Library/LaunchAgents/com.wilmccann.memo-router.plist` with `StartInterval` 900 and `RunAtLoad` false.
+- A LaunchAgent plist at `~/Library/LaunchAgents/com.wilmccann.memo-router.plist` with `StartInterval` ~~900~~ 240 and `RunAtLoad` false. `bin/uninstall-launchagent.sh` removes it.
 - `ProgramArguments` runs a small shell wrapper, `bin/process-memos.sh`, which:
   1. takes a lock (`mkdir` on a lock directory; exits if it exists and is younger than 30 minutes) so two runs never overlap;
   2. loads nothing from `.env` into the shell that could be echoed (rule 2); MCP servers read their own credentials;
-  3. runs `claude -p "$(cat prompts/process-new-memos.md)" --output-format json --max-turns 40 --allowedTools <the six tools in 5.2>`;
-  4. appends one line per run to `logs/runs.log`: timestamp, rows claimed, rows done, rows asked, rows errored. No transcript text (rule 11).
+  3. (added 2026-09-08) asks the web app's `ping` action, through `mcp/sheet-server.js --pending`, how many rows a claim would take right now, and exits silently if the answer is zero. This is one small HTTPS request and no model call. A failed check is logged and treated as zero; the next firing tries again;
+  4. runs `claude -p "$(cat prompts/process-new-memos.md)" --output-format json --max-turns 40 --allowedTools <the six tools in 5.2>`;
+  5. appends one line per agent run to `logs/runs.log`: timestamp, rows claimed, rows done, rows asked, rows errored, rows skipped, and the API-equivalent cost. No transcript text (rule 11). Empty polls write nothing.
 - The prompt file is the whole agent. It is version-controlled; the DM examples in 3.5, the route table in 5.1 and the rules in `CLAUDE.md` are all in it.
-- Cost of an empty run (no new rows) is one Sheet read and a few hundred tokens. 96 runs a day is fine.
+- ~~Cost of an empty run (no new rows) is one Sheet read and a few hundred tokens. 96 runs a day is fine.~~ Cost of an empty poll is one Apps Script execution and no tokens. 360 a day at the 4-minute default costs nothing in tokens and a few minutes of Apps Script's daily runtime quota; even once a minute (1,440) stays inside the consumer-account limit.
 
-Why launchd rather than cron: it survives sleep and wake on a Mac, runs missed intervals on wake, and does not need the terminal open. Why 15 minutes: `PLAN.md` open question; this is the fastest interval that still feels like a batch and keeps a run from overlapping the previous one.
+Why launchd rather than cron: it survives sleep and wake on a Mac, runs missed intervals on wake, and does not need the terminal open. ~~Why 15 minutes: `PLAN.md` open question; this is the fastest interval that still feels like a batch and keeps a run from overlapping the previous one.~~ Why 4 minutes: 15 was chosen when every firing launched the agent. With the precheck, a firing that finds nothing costs no tokens, so the interval is a matter of taste; Will chose 4 minutes, so a memo is typically picked up within two minutes plus the run's own 60 to 90 seconds. `--interval 60` is there if that ever feels slow. What remains is the Mac being asleep, which only 4.2 or 4.3 removes.
 
 ### 4.2 Version 0, alternative: Claude Code cloud routine, hourly
 
@@ -411,5 +412,6 @@ Plus three negative cases that are not in `PLAN.md`:
 | --- | --- | --- |
 | 1 | 2026-09-04 | First draft from `PLAN.md` rev 3. Spelled out the poll-versus-push trigger, the text-only data contract, the Sheet schema and status machine, the Apps Script header limitation and the two secret-transport options, and three negative test cases. |
 | 2 | 2026-09-04 | Section 3.2 rewritten for the amended rule 4: three transports in order of preference, with the exposure of each stated honestly. |
+| 5 | 2026-09-08 | 4.1 rewritten: the timer fires every 4 minutes and the wrapper checks the Sheet with the `ping` action first, launching the agent only when a row is waiting. `ping` now reports `pending`, counted by the claim's own rules. |
 | 4 | 2026-09-08 | First real run of the agent on 2026-09-08: four rows, three DMs, and the duplicate row parked as `skipped` by the agent's own judgment, which section 2 step 8 of the prompt now spells out. 3.1 closed with the real body shape; the redirect question closed with the retry finding; `source_id` added to 3.3 and the receiver made idempotent on it; section 9 updated. Later the same day: a claim finished on Google's side but timed out on the Mac at 30s, and the retry found its own rows "taken", so the run reported nothing and two memos waited for the stale window. Claim is now idempotent per `run_id` (a repeat returns the rows that run already holds, no new attempt), the sheet server sends one run id per process and waits up to 120s, and the prompt reports a failed read as an error rather than an empty run. |
 | 3 | 2026-09-05 | Version 0 built. Where the build disagreed with the draft, the draft is struck through and the reason recorded in place: 5.2 (no Sheets or Slack MCP server exists on the Mac, so two narrow local ones were written), 5.3 step 2 (claiming moved inside the read, so it is atomic), 3.3 (`claimed_at` and `attempts` added, because the status machine needs them). Section 7 is now executable: `test/run-fixtures.mjs` for cases 1 to 12, `test/check-receiver.sh` for case 13. |

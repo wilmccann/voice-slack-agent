@@ -8,10 +8,15 @@
 # one interval later.
 #
 # Usage:
-#   bin/install-launchagent.sh                 install at the default 15 minutes
-#   bin/install-launchagent.sh --interval 300  every 5 minutes, for a trial
+#   bin/install-launchagent.sh                 install at the default, every 4 minutes
+#   bin/install-launchagent.sh --interval 60   once a minute instead
 #   bin/install-launchagent.sh --status        is it loaded, and when did it last run
-#   bin/install-launchagent.sh --uninstall     unload and delete it
+#   bin/install-launchagent.sh --uninstall     unload and delete it (or bin/uninstall-launchagent.sh)
+#
+# A short interval is affordable because bin/process-memos.sh checks the Sheet
+# with one small request first and only launches the agent when a row is
+# waiting. At 4 minutes a memo is typically picked up within two minutes of
+# landing, and the check runs 360 times a day.
 
 set -uo pipefail
 
@@ -19,15 +24,15 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.wilmccann.memo-router"
 TEMPLATE="$ROOT/launchd/$LABEL.plist.template"
 TARGET="$HOME/Library/LaunchAgents/$LABEL.plist"
-INTERVAL=900
+INTERVAL=240
 MODE="install"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --interval) INTERVAL="${2:-900}"; shift 2 ;;
+    --interval) INTERVAL="${2:-60}"; shift 2 ;;
     --status) MODE="status"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
-    --help|-h) sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;
+    --help|-h) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -99,7 +104,12 @@ install)
   launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null
   if launchctl bootstrap "gui/$UID_NUM" "$TARGET" 2>/dev/null \
      || launchctl load "$TARGET" 2>/dev/null; then
-    echo "Installed $LABEL, running every $((INTERVAL / 60)) minutes."
+    if [ "$INTERVAL" -lt 120 ]; then
+      echo "Installed $LABEL, checking every $INTERVAL seconds."
+    else
+      echo "Installed $LABEL, checking every $((INTERVAL / 60)) minutes."
+    fi
+    echo "Each check is one request to the Sheet; the agent only runs when a row is waiting."
     echo
     echo "It will not fire immediately. To see a run now:"
     echo "  bin/process-memos.sh --verbose"

@@ -577,6 +577,28 @@ test('timeOf reads a stored time whether Sheets gives back a string or a Date', 
   eq(sandbox.timeOf('not a time'), 0, 'from nonsense');
 });
 
+test('ping counts pending by the same rules claim uses', () => {
+  const sheet = sheetWithRows([
+    { id: 'n', received_at: iso(1000), transcript: 'x', status: 'new', attempts: 0 },
+    { id: 'stale', received_at: iso(60 * 60 * 1000), transcript: 'x', status: 'processing',
+      run_id: 'dead', claimed_at: iso(45 * 60 * 1000), attempts: 1 },
+    { id: 'live', received_at: iso(60000), transcript: 'x', status: 'processing',
+      run_id: 'alive', claimed_at: iso(60 * 1000), attempts: 1 },
+    { id: 'retry', received_at: iso(1000), transcript: 'x', status: 'error', attempts: 2 },
+    { id: 'spent', received_at: iso(1000), transcript: 'x', status: 'error', attempts: 3 },
+    { id: 'd', received_at: iso(1000), transcript: 'x', status: 'done', processed_at: iso(500) },
+    { id: 's', received_at: iso(1000), transcript: 'x', status: 'skipped' },
+  ]);
+  const { sandbox } = loadScript({ sheet });
+  const res = parse(sandbox.doGet(getEvent({ action: 'ping', k: SECRET })));
+  eq(res.pending, 3, 'new + stale processing + retryable error');
+  eq(sheet._rows()[1].status, 'processing', 'ping changed nothing');
+  // And claim agrees.
+  const claim = parse(sandbox.doGet(getEvent({ action: 'claim', k: SECRET, run_id: 'r' })));
+  eq(claim.rows.length, 3, 'claim takes exactly those three');
+  eq(parse(sandbox.doGet(getEvent({ action: 'ping', k: SECRET }))).pending, 0, 'nothing pending after the claim');
+});
+
 test('ping reports counts by status and no memo content', () => {
   const sheet = sheetWithRows([
     { id: 'a', received_at: iso(1000), transcript: 'a distinctive synthetic phrase', status: 'new' },

@@ -125,7 +125,7 @@ not the text.
 | `GET ?action=claim` | Returns the oldest unhandled rows and marks them `processing` in the same locked step. A repeat with the same `run_id` returns the rows that run already holds, so a lost answer can be retried. Also returns stale claims to `new` and parks rows that have failed three times. |
 | `GET ?action=history` | Recent processed rows, for health patterns and task updates. Returns `action_summary`, not the transcript, unless asked. |
 | `POST ?action=complete` | Writes the outcome of one row. |
-| `GET ?action=ping` | Row counts by status. No memo content. |
+| `GET ?action=ping` | Row counts by status and `pending`, the number a claim would take now. No memo content. The run wrapper polls this every few minutes. |
 
 The agent never calls these directly. `mcp/sheet-server.js` wraps them as the three
 tools `SPEC.md` 5.2 names.
