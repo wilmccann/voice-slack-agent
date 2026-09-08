@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "capture-receiver",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["receiver/capture.js"],
+      "port": 8787
+    }
+  ]
+}

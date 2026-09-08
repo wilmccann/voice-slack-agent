@@ -3,7 +3,12 @@
 A personal agent that routes voice memos. Will records a memo on his phone with the Webhook Voice Automation app in text mode; the transcript is POSTed to a webhook; an agent decides which of five kinds of memo it is (task, journal, mindfulness or health, question, idea), acts, and sends a Slack DM.
 
 - `PLAN.md` is the source of truth. It doubles as the handout for the Build with Claude meetup on 2026-09-05. Keep the revision log at the bottom current on every meaningful edit.
-- Nothing is built yet. Version 0 in the plan is propose-only: no write tools except the Slack DM.
+- Version 0 is built as of 2026-09-05 and is propose-only: no write tools except the
+  Slack DM. `README.md` says what is where and how to set it up. First real run on
+  2026-09-08. The phone app's body shape is known (`SPEC.md` 3.1). Open: the app
+  retries every POST because Apps Script answers with a 302, so the receiver is
+  idempotent on `recording_id` and the Lambda receiver (`SPEC.md` 4.3) moves up; the
+  LaunchAgent is not installed yet; the retention period is still open.
 - Health memos are private. They never leave the DM and the audit Sheet, in any version.
 - All artifacts for this work live in this folder.
 
@@ -24,8 +29,14 @@ version of the agent. Cite them by number.
 3. The Apps Script web app URL and any Lambda function URL are treated as secrets.
    They are unauthenticated entry points; possessing one means being able to write
    memos as Will.
-4. Every inbound webhook requires a shared-secret header the phone app sends. Requests
-   without it are dropped and not logged in full.
+4. Every inbound webhook requires a shared secret the phone app sends. It travels in a
+   request header where the receiver can read one (Lambda, version 2). Where it cannot
+   (Apps Script, version 0), it travels as a field in the JSON body, and the receiver
+   strips it before writing the row. A query parameter is the last resort, only if the
+   app can do neither; then the receiver never logs the query string. Requests without
+   the secret, or with a wrong one, are dropped and not logged in full. The expected
+   value is stored per rule 1 (Script Properties for Apps Script) and compared in
+   constant time. Amended 2026-09-04: Apps Script `doPost` cannot read headers.
 5. Least privilege on every integration: Slack scoped to sending Will a DM and nothing
    else; Google scoped to the one audit Sheet; Trello read-only in version 0.
 6. If a secret ever appears in chat, a commit, a log, or an issue: rotate it first,
