@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "memo-sheet": {
+      "command": "node",
+      "args": ["mcp/sheet-server.js"],
+      "description": "Reads and writes the memo_inbox Sheet through the Apps Script web app."
+    },
+    "memo-slack": {
+      "command": "node",
+      "args": ["mcp/slack-server.js"],
+      "description": "Sends one DM to Will. The only write tool in version 0."
+    }
+  }
+}

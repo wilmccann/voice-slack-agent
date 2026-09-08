@@ -1,6 +1,11 @@
 .DS_Store
 .env
 .env.*
+!.env.example
 *.log
 node_modules/
 .claude/settings.local.json
+receiver/captures/
+.run-lock/
+logs/
+test/results/
