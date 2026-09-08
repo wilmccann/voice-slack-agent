@@ -8,7 +8,8 @@
  *   GET   ?action=claim      return and claim new rows  -> status=processing
  *   GET   ?action=history    recent processed rows, for pattern and update checks
  *   POST  ?action=complete   write the outcome of one row
- *   GET   ?action=ping       liveness, says nothing about the data
+ *   GET   ?action=ping       liveness and counts by status, no memo content;
+ *                            "pending" is what a claim would return right now
  *
  * Rules cited are CLAUDE.md rules 1 to 15.
  *
@@ -374,15 +375,30 @@ function handleComplete(e, body) {
   }
 }
 
+/**
+ * Counts by status, plus "pending": the rows a claim would take right now,
+ * by the same rules handleClaim applies (new, or processing past the stale
+ * window, or error with attempts left).  The run wrapper polls this once a
+ * minute and only launches the agent when it is above zero, so a poll costs
+ * one Sheet read and no model call.  Nothing here touches a row.
+ */
 function handlePing(e, body) {
   if (!authorised(e, body.data)) return reject('ping');
   var t = table();
   var counts = {};
+  var pending = 0;
+  var staleBefore = Date.now() - STALE_CLAIM_MINUTES * 60 * 1000;
   for (var i = 0; i < t.rows.length; i++) {
-    var s = String(t.rows[i].get('status') || 'blank');
+    var r = t.rows[i];
+    var s = String(r.get('status') || 'blank');
     counts[s] = (counts[s] || 0) + 1;
+    if (s === 'new') pending++;
+    else if (s === 'processing' && !r.get('processed_at')) {
+      var at = timeOf(r.get('claimed_at'));
+      if (!at || at < staleBefore) pending++;
+    } else if (s === 'error' && Number(r.get('attempts') || 0) < MAX_ATTEMPTS) pending++;
   }
-  return json({ ok: true, sheet: SHEET_NAME, rows: t.rows.length, status: counts });
+  return json({ ok: true, sheet: SHEET_NAME, rows: t.rows.length, status: counts, pending: pending });
 }
 
 /* --------------------------------------------------------------- auth (r4) */
