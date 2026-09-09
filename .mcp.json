@@ -8,7 +8,12 @@
     "memo-slack": {
       "command": "node",
       "args": ["mcp/slack-server.js"],
-      "description": "Sends one DM to Will. The only write tool in version 0."
+      "description": "Sends Will a DM now, or schedules one as a reminder. No other destination."
+    },
+    "memo-trello": {
+      "command": "node",
+      "args": ["mcp/trello-server.js"],
+      "description": "Creates a card in one configured Trello list. Nothing else."
     }
   }
 }

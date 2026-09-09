@@ -173,11 +173,14 @@ Pick A if the app allows a custom body field, else B. `pathInfo` (a secret path 
 | `route` | enum or blank | agent | `task` / `journal` / `health` / `question` / `idea` / `ask` |
 | `confidence` | `high` / `medium` / `low` | agent | the agent's own estimate; `low` forces `ask` |
 | `action_summary` | string | agent | one line: what was proposed or answered |
-| `dm_ts` | string | agent | Slack message timestamp of the DM, the join key for replies (v1) |
+| `dm_ts` | string | agent | Slack message timestamp of the DM, the join key for replies (v1). Stored as plain text: Sheets keeps 15 significant digits in a number and a Slack timestamp has 16, so a numeric cell loses its last digit (found 2026-09-08 when every reply lookup failed). `id`, `source_id` and `action_ref` get the same treatment. A `dm_ts` that is still wrong is recovered by the Slack server from the "memo <id>" line the DM carries. |
 | `processed_at` | ISO 8601 UTC | agent | |
 | `error` | string or blank | agent | tool failure or exception text, no transcript in it |
 | `answer_to` | id or blank | agent (v1) | for a reply row that resolves an earlier `asked` row |
 | `source_id` | string | doPost | the app's `recording_id`, or a SHA-256 of `device_ts` and the text when the client sends no id; the dedupe key (added 2026-09-08) |
+| `action_ref` | string or blank | agent (v1) | a reference to what was created: Trello card short URL, Slack `scheduled_message_id`, or journal `entry_id`. Never content. How a later "cancel that" finds its target. |
+
+**Journal tab (version 1).** A second tab, `journal`, in the same Sheet: `entry_id`, `memo_id`, `received_at`, `kind` (`journal` or `idea`), `theme`, `entry`, `created_at`. Written by the `journal` action, one entry per memo, never for a row marked `health`. Created by `setupSheet()` or on first use.
 
 Two more columns were added when this was built, because the status machine below needs state this table did not carry: `claimed_at`, the time a run took the row, without which a stale claim cannot be spotted; and `attempts`, without which "max 3 times, then skipped" cannot be counted. Both sit after `run_id`. `source_id` was added on 2026-09-08 at the end, after the phone app's retries filled the Sheet with copies; `setupSheet()` appends missing columns to a live sheet without moving existing data. The live order is in `COLUMNS` at the top of `apps-script/Code.gs`.
 
@@ -354,6 +357,22 @@ Hard limits per run: 20 rows, 40 turns, one web search per question row, one DM 
 - **Reply loop:** the run reads Slack thread replies on each `asked` row's `dm_ts` (Slack read-thread tool). A reply of "create", "yes" or a correction resolves the row: the agent re-runs the decision with the reply as extra context, acts, writes `answer_to`, sets `done`. A reply is Will's instruction, not memo text, so rule 13 does not apply to it; but it is still only allowed to trigger the tools in the route's allow-list.
 - **New status:** none. `asked` already exists; `answer_to` is the only new column.
 
+**Built 2026-09-08** on the `add-write-tools` branch. Where the build differs from the four bullets:
+
+| Tool name in prompt | Backing | Write | Route | When |
+| --- | --- | --- | --- | --- |
+| `journal_append` | `mcp/sheet-server.js` -> Apps Script `journal` action -> `journal` tab of the audit Sheet (a Google Doc would have needed a new scope) | Sheet | journal (`kind: journal`), idea (`kind: idea`) | now, at `confidence=high`; otherwise proposed |
+| `trello_create_card` | `mcp/trello-server.js`, new, one tool; list fixed by `TRELLO_LIST_ID`, no board or list argument | Trello, one list | task | always proposed first, dated or not (rule 15 overrides the bullet above) |
+| `slack_schedule_reminder` (was `reminder_create`) | `mcp/slack-server.js` -> `chat.scheduleMessage` into the same DM; needs no scope beyond `chat:write` | the DM, later | task that says remind, with a time | always proposed first |
+| `sheet_read_asked` | Apps Script `asked` action: rows with `status=asked` and a `dm_ts`, transcript included | read | the reply loop | once per run |
+| `slack_read_replies` | `conversations.replies` on the DM, filtered to Will's messages; needs `im:history`, the one new Slack scope | read | the reply loop | per asked row |
+
+- `slack_dm` gained `thread_ts`, so the agent answers a reply in the same thread. The row keeps its original `dm_ts`.
+- `answer_to` is not written by the reply loop: the asked row itself goes to `done` with `action_ref`. `answer_to` stays for a later memo that resolves an earlier one.
+- A "cancel" or a change to an earlier task is proposed and left `asked`; nothing is deleted or moved in version 1.
+- The run summary line gains `replied`. The precheck in 4.1 asks Slack whether any asked thread ends with a message from Will, so a reply is picked up within the same interval as a memo.
+- Not built: `calendar_read`, and the Trello read the version 0 table listed as optional.
+
 ## 7. Test set and acceptance
 
 The ten memos in `PLAN.md` section 8 are recorded as synthetic fixtures in `fixtures/` (rule 7) and, once the receiver exists, as real POSTs.
@@ -412,6 +431,8 @@ Plus three negative cases that are not in `PLAN.md`:
 | --- | --- | --- |
 | 1 | 2026-09-04 | First draft from `PLAN.md` rev 3. Spelled out the poll-versus-push trigger, the text-only data contract, the Sheet schema and status machine, the Apps Script header limitation and the two secret-transport options, and three negative test cases. |
 | 2 | 2026-09-04 | Section 3.2 rewritten for the amended rule 4: three transports in order of preference, with the exposure of each stated honestly. |
+| 7 | 2026-09-08 | First live reply resolved: two "yes" replies became two Trello cards. Three things fixed on the way: the Sheet rounded `dm_ts` (3.3), the Slack read methods need query arguments not a JSON body, and the prompt's empty-inbox rule skipped the reply phase. |
+| 6 | 2026-09-08 | Version 1 built on the `add-write-tools` branch: section 6 table records what was built and the three decisions (journal tab not Doc; reminder as a scheduled DM; rule 15 means cards and reminders always ask first). 3.3 gains `action_ref` and the journal tab. |
 | 5 | 2026-09-08 | 4.1 rewritten: the timer fires every 4 minutes and the wrapper checks the Sheet with the `ping` action first, launching the agent only when a row is waiting. `ping` now reports `pending`, counted by the claim's own rules. |
 | 4 | 2026-09-08 | First real run of the agent on 2026-09-08: four rows, three DMs, and the duplicate row parked as `skipped` by the agent's own judgment, which section 2 step 8 of the prompt now spells out. 3.1 closed with the real body shape; the redirect question closed with the retry finding; `source_id` added to 3.3 and the receiver made idempotent on it; section 9 updated. Later the same day: a claim finished on Google's side but timed out on the Mac at 30s, and the retry found its own rows "taken", so the run reported nothing and two memos waited for the stale window. Claim is now idempotent per `run_id` (a repeat returns the rows that run already holds, no new attempt), the sheet server sends one run id per process and waits up to 120s, and the prompt reports a failed read as an error rather than an empty run. |
 | 3 | 2026-09-05 | Version 0 built. Where the build disagreed with the draft, the draft is struck through and the reason recorded in place: 5.2 (no Sheets or Slack MCP server exists on the Mac, so two narrow local ones were written), 5.3 step 2 (claiming moved inside the read, so it is atomic), 3.3 (`claimed_at` and `attempts` added, because the status machine needs them). Section 7 is now executable: `test/run-fixtures.mjs` for cases 1 to 12, `test/check-receiver.sh` for case 13. |

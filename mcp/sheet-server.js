@@ -1,5 +1,10 @@
 #!/usr/bin/env node
-// Memo Router — the three Sheet tools, as a stdio MCP server.
+// Memo Router — the Sheet tools, as a stdio MCP server.
+//
+// Version 0 had three: read_new, history, update_row. Version 1 (2026-09-08)
+// adds journal_append, the first write that is not the DM: it files a journal
+// entry or an idea to the "journal" tab of the same Sheet through the web
+// app's journal action. Health memos are refused on the Google side (rule 10).
 //
 // SPEC.md 5.2 names these tools and offers two backings: a Google Sheets MCP
 // server, or extra Apps Script endpoints called with a fetch tool. There is no
@@ -21,10 +26,12 @@
 //
 // Also a command-line mode, for bin/process-memos.sh:
 //   node mcp/sheet-server.js --pending
-// prints one number, how many rows a claim would take right now, and exits.
-// The wrapper cannot ask the web app itself without loading the dotenv file
-// into a shell (rule 2), so it asks this process, which already holds the
-// credentials and prints nothing but the count.
+// prints one JSON line, {"pending": N, "asked_ts": [...]}: how many rows a
+// claim would take right now, and the DM timestamps of rows waiting on a
+// reply (version 1), so the wrapper can ask Slack about those threads. The
+// wrapper cannot ask the web app itself without loading the dotenv file into
+// a shell (rule 2), so it asks this process, which already holds the
+// credentials and prints nothing but counts and timestamps.
 
 'use strict';
 
@@ -223,8 +230,52 @@ const TOOLS = [
           type: 'string',
           description: 'Row id this memo resolves, when it answers an earlier asked row.',
         },
+        action_ref: {
+          type: 'string',
+          description:
+            'A reference to what was created for this memo: the Trello card URL, the ' +
+            'Slack scheduled_message_id, or the journal entry_id. Leave it out when ' +
+            'nothing was created. Never memo text.',
+        },
       },
       required: ['id', 'status'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'sheet_read_asked',
+    description:
+      'Version 1. The rows that are waiting on a reply from Will: status asked, each ' +
+      'with the dm_ts of the DM that asked, its transcript, and the action_summary ' +
+      'that says what was proposed. Call once per run, after the new rows. Then call ' +
+      'slack_read_replies with each dm_ts to see whether Will has answered. Nothing ' +
+      'is claimed or changed by this call.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: { type: 'integer', minimum: 1, maximum: 90, description: 'How far back to look. Default 30.' },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'journal_append',
+    description:
+      'Version 1 write tool. File a journal entry or an idea to the journal tab of the ' +
+      'audit Sheet. Allowed only for route journal (kind "journal") and route idea ' +
+      '(kind "idea") at high confidence; the receiver refuses a memo marked health. ' +
+      'Pass your one- or two-sentence summary as entry, not the transcript. Call at ' +
+      'most once per memo; a repeat returns the entry already made. Returns ' +
+      '{entry_id}, which goes into the row as action_ref.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        memo_id: { type: 'string', description: 'The row id from sheet_read_new.' },
+        kind: { type: 'string', enum: ['journal', 'idea'] },
+        theme: { type: 'string', description: 'One line: the theme, or the idea in a few words.' },
+        entry: { type: 'string', minLength: 1, description: 'The summary to file. One or two sentences.' },
+      },
+      required: ['memo_id', 'kind', 'entry'],
       additionalProperties: false,
     },
   },
@@ -258,12 +309,32 @@ async function call(name, a) {
     if (!a.id) throw new Error('sheet_update_row needs an id.');
     if (!a.status) throw new Error('sheet_update_row needs a status.');
     const body = { id: a.id, status: a.status };
-    for (const f of ['route', 'confidence', 'action_summary', 'dm_ts', 'error', 'answer_to']) {
+    for (const f of ['route', 'confidence', 'action_summary', 'dm_ts', 'error', 'answer_to', 'action_ref']) {
       if (a[f] !== undefined && a[f] !== null && a[f] !== '') body[f] = String(a[f]);
     }
     const data = await callWebApp('complete', { body });
-    log('sheet_update_row', { id: a.id, status: a.status, route: a.route || '-' });
+    log('sheet_update_row', { id: a.id, status: a.status, route: a.route || '-', ref: a.action_ref ? 'yes' : '-' });
     return { ok: true, id: data.id, status: data.status };
+  }
+
+  if (name === 'sheet_read_asked') {
+    const data = await callWebApp('asked', { query: { days: a.days } });
+    log('sheet_read_asked', { rows: (data.rows || []).length });
+    return { rows: data.rows || [] };
+  }
+
+  if (name === 'journal_append') {
+    if (!a.memo_id) throw new Error('journal_append needs a memo_id.');
+    if (!a.entry || !String(a.entry).trim()) throw new Error('journal_append needs an entry.');
+    const body = {
+      memo_id: String(a.memo_id),
+      kind: a.kind || 'journal',
+      theme: a.theme ? String(a.theme) : '',
+      entry: String(a.entry),
+    };
+    const data = await callWebApp('journal', { body });
+    log('journal_append', { memo_id: a.memo_id, kind: body.kind, entry_id: data.entry_id, duplicate: !!data.duplicate });
+    return { ok: true, entry_id: data.entry_id, duplicate: !!data.duplicate };
   }
 
   throw new Error(`Unknown tool: ${name}`);
@@ -281,7 +352,16 @@ async function printPending() {
     const s = data.status || {};
     pending = (s.new || 0) + (s.error || 0) + (s.processing || 0);
   }
-  process.stdout.write(String(pending) + '\n');
+  const askedTs = Array.isArray(data.asked_ts) ? data.asked_ts.map(String) : [];
+  // asked: [{id, ts}] from a v1b deployment; built from asked_ts (no ids) for
+  // an older one. The wrapper hands these to the Slack server as id:ts.
+  const asked = Array.isArray(data.asked)
+    ? data.asked.map((a) => ({ id: String(a.id), ts: String(a.ts) }))
+    : askedTs.map((ts) => ({ ts }));
+  // deployed: the SCRIPT_VERSION the live web app reports, or "pre-v1" for a
+  // deployment older than the field. The wrapper ignores it; a person does not.
+  const deployed = typeof data.version === 'string' ? data.version : 'pre-v1';
+  process.stdout.write(JSON.stringify({ pending, asked, asked_ts: askedTs, deployed }) + '\n');
 }
 
 if (process.argv.includes('--pending')) {

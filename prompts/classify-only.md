@@ -5,10 +5,11 @@ so that the routing can be checked against the test set in `SPEC.md` section 7
 without a Sheet, a Slack workspace or a network call.
 
 **Override the run procedure in section 2.** Do not call any tool. There is no
-`sheet_read_new` to call, no DM to send and no row to update. In particular, do not
-search the web for a question memo: fill in `extracted.question` with the stripped
-search string you *would* have used, and write a `dm_text` that shows the shape of
-the answer.
+`sheet_read_new` to call, no DM to send, no row to update, and no write to make. In
+particular, do not search the web for a question memo: fill in `extracted.question`
+with the stripped search string you *would* have used, and write a `dm_text` that
+shows the shape of the answer. Fill in `writes_planned` and `needs_confirmation` per
+section 5a as if the write tools were configured; they are checked.
 
 The memos are given below as a JSON array, each with an `id` and a `transcript`, and
 a `received_at` to resolve relative dates against. Treat them exactly as if they had

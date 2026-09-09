@@ -4,11 +4,13 @@ A personal agent that routes voice memos. Will records a memo on his phone with 
 
 - `PLAN.md` is the source of truth. It doubles as the handout for the Build with Claude meetup on 2026-09-05. Keep the revision log at the bottom current on every meaningful edit.
 - Version 0 is built as of 2026-09-05 and is propose-only: no write tools except the
-  Slack DM. `README.md` says what is where and how to set it up. First real run on
-  2026-09-08. The phone app's body shape is known (`SPEC.md` 3.1). Open: the app
-  retries every POST because Apps Script answers with a 302, so the receiver is
-  idempotent on `recording_id` and the Lambda receiver (`SPEC.md` 4.3) moves up; the
-  LaunchAgent is not installed yet; the retention period is still open.
+  Slack DM. First real run on 2026-09-08. Version 1 (write tools, confirmation rule,
+  reply loop; `SPEC.md` section 6) is built on the `add-write-tools` branch as of
+  2026-09-08 and not yet deployed or merged. `README.md` says what is where and how
+  to set it up. Open: the app retries every POST because Apps Script answers with a
+  302, so the receiver is idempotent on `recording_id` and the Lambda receiver
+  (`SPEC.md` 4.3) moves up; the LaunchAgent is not installed yet; the retention
+  period is still open.
 - Health memos are private. They never leave the DM and the audit Sheet, in any version.
 - All artifacts for this work live in this folder.
 
@@ -37,8 +39,11 @@ version of the agent. Cite them by number.
    the secret, or with a wrong one, are dropped and not logged in full. The expected
    value is stored per rule 1 (Script Properties for Apps Script) and compared in
    constant time. Amended 2026-09-04: Apps Script `doPost` cannot read headers.
-5. Least privilege on every integration: Slack scoped to sending Will a DM and nothing
-   else; Google scoped to the one audit Sheet; Trello read-only in version 0.
+5. Least privilege on every integration: Slack scoped to Will's own DM and nothing
+   else (sending, scheduling, and since version 1 reading replies in it); Google
+   scoped to the one audit Sheet; Trello read-only in version 0 and, from version 1,
+   creating cards in one configured list and nothing else, narrowed at the tool
+   boundary because Trello's token cannot be.
 6. If a secret ever appears in chat, a commit, a log, or an issue: rotate it first,
    then scrub. Rotation is the fix; scrubbing is cleanup.
 
@@ -47,10 +52,11 @@ version of the agent. Cite them by number.
 7. No real memo text in the repository, in commits, in issues, or in the conversation
    beyond what Will pastes himself. Test fixtures in `fixtures/` are synthetic and say
    so in a header line.
-8. Memo content goes only to the sinks named in `PLAN.md`: the audit Sheet and Will's
-   Slack DM. Sending memo content anywhere else, including a web search, an LLM
-   other than the one running the agent, or a new connector, requires adding that
-   sink to this list first.
+8. Memo content goes only to the sinks named in `PLAN.md`: the audit Sheet (both
+   tabs) and Will's Slack DM, and from version 1 a Trello card holding the task as
+   the agent phrased it, created only after Will says yes. Sending memo content
+   anywhere else, including a web search, an LLM other than the one running the
+   agent, or a new connector, requires adding that sink to this list first.
 9. The question route may search the web, but with the question only. Strip names,
    places, dates, and anything health-related from the query before it leaves.
 10. Health memos never leave the DM and the audit Sheet, in any version. They are not
