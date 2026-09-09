@@ -86,10 +86,11 @@ runs. `bin/uninstall-launchagent.sh` stops it and touches nothing else.
 
 **7. Version 1: let it write (optional, `add-write-tools` branch).**
 
-Three write tools, each behind the rule that anything outside the DM and the audit
-Sheet is proposed first and created only after you reply "yes" in the DM thread
-(`CLAUDE.md` rule 15). Journal entries and ideas file straight into a `journal` tab
-of the audit Sheet at high confidence. To turn the rest on:
+Three write tools. At high or medium confidence the agent creates the thing and the
+DM says exactly what it made; at low confidence it asks and creates nothing. It never
+archives, deletes or moves anything (`CLAUDE.md` rule 15, as amended 2026-09-08).
+Journal entries and ideas file into a `journal` tab of the audit Sheet the same way.
+To turn the rest on:
 
 - **Slack:** add the `im:history` scope to the Memo Router app and reinstall it, so
   the agent can read your replies in the DM thread. That is the only new scope.
@@ -111,8 +112,8 @@ of the audit Sheet at high confidence. To turn the rest on:
 - **Apps Script:** paste the new `Code.gs`, run `setupSheet` again (it adds the
   `action_ref` column and the `journal` tab), and deploy a new version.
 
-Until the Trello values are set, a proposed card that you confirm is answered with
-"not configured yet" in the thread, and the row is marked done.
+Until the Trello values are set, a task's DM says the card could not be created yet,
+and the row is marked done.
 
 ## Watching it
 

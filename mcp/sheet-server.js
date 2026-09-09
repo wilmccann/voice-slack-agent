@@ -263,7 +263,8 @@ const TOOLS = [
     description:
       'Version 1 write tool. File a journal entry or an idea to the journal tab of the ' +
       'audit Sheet. Allowed only for route journal (kind "journal") and route idea ' +
-      '(kind "idea") at high confidence; the receiver refuses a memo marked health. ' +
+      '(kind "idea") at high or medium confidence; the receiver refuses a memo marked ' +
+      'health. ' +
       'Pass your one- or two-sentence summary as entry, not the transcript. Call at ' +
       'most once per memo; a repeat returns the entry already made. Returns ' +
       '{entry_id}, which goes into the row as action_ref.',
