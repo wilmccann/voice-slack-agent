@@ -27,6 +27,7 @@ const SECRET = 'test-secret-value';
 
 function makeSheet(header, rows = []) {
   const grid = [header.slice(), ...rows.map((r) => r.slice())];
+  const formats = {};
   const api = {
     getLastRow: () => grid.length,
     getLastColumn: () => (grid[0] ? grid[0].length : 0),
@@ -49,8 +50,16 @@ function makeSheet(header, rows = []) {
           return this;
         },
         setFontWeight() { return this; },
+        setNumberFormat(fmt) {
+          for (let r = 0; r < numRows; r++) for (let c = 0; c < numCols; c++) {
+            formats[`${row + r},${col + c}`] = fmt;
+          }
+          return this;
+        },
       };
     },
+    getMaxRows: () => Math.max(grid.length, 1000),
+    _format: (row, col) => formats[`${row},${col}`],
     appendRow(line) { grid.push(line.slice()); },
     deleteRow(n) { grid.splice(n - 1, 1); },
     setFrozenRows() {},
@@ -64,8 +73,14 @@ function makeSheet(header, rows = []) {
 
 /* --------------------------------------------------- the Apps Script globals */
 
-function loadScript({ properties = { WEBHOOK_SECRET: SECRET }, sheet } = {}) {
+function loadScript({ properties = { WEBHOOK_SECRET: SECRET }, sheet, sheets = {} } = {}) {
   const logs = [];
+  // A spreadsheet is a map of tabs by name. `sheet` is the memo_inbox tab.
+  const tabs = { memo_inbox: sheet, ...sheets };
+  const spreadsheet = {
+    getSheetByName: (name) => tabs[name] || null,
+    insertSheet: (name) => { tabs[name] = makeSheet([]); return tabs[name]; },
+  };
   const sandbox = {
     console: {
       log: (...a) => logs.push(a.join(' ')),
@@ -83,8 +98,8 @@ function loadScript({ properties = { WEBHOOK_SECRET: SECRET }, sheet } = {}) {
       getScriptProperties: () => ({ getProperty: (k) => (k in properties ? properties[k] : null) }),
     },
     SpreadsheetApp: {
-      getActiveSpreadsheet: () => ({ getSheetByName: () => sheet, insertSheet: () => sheet }),
-      openById: () => ({ getSheetByName: () => sheet, insertSheet: () => sheet }),
+      getActiveSpreadsheet: () => spreadsheet,
+      openById: () => spreadsheet,
       flush: () => {},
     },
     LockService: {
@@ -106,7 +121,7 @@ function loadScript({ properties = { WEBHOOK_SECRET: SECRET }, sheet } = {}) {
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(readFileSync(join(ROOT, 'apps-script/Code.gs'), 'utf8'), sandbox);
-  return { sandbox, logs };
+  return { sandbox, logs, tabs };
 }
 
 const parse = (response) => JSON.parse(response._text);
@@ -146,10 +161,10 @@ function ok(cond, what) {
 const HEADER = [
   'id', 'received_at', 'device_ts', 'transcript', 'label', 'raw_json', 'status',
   'run_id', 'claimed_at', 'attempts', 'route', 'confidence', 'action_summary',
-  'dm_ts', 'processed_at', 'error', 'answer_to', 'source_id',
+  'dm_ts', 'processed_at', 'error', 'answer_to', 'source_id', 'action_ref',
 ];
-// The header a sheet set up before 2026-09-08 has: no source_id column.
-const OLD_HEADER = HEADER.slice(0, -1);
+// The header a sheet set up before 2026-09-08 has: no source_id or action_ref.
+const OLD_HEADER = HEADER.slice(0, -2);
 
 const iso = (msAgo) => new Date(Date.now() - msAgo).toISOString();
 
@@ -346,8 +361,9 @@ test('setupSheet adds the missing column to an existing sheet without touching i
   ]);
   const { sandbox, logs } = loadScript({ sheet });
   sandbox.setupSheet();
-  eq(sheet._grid[0].length, HEADER.length, 'one column added');
-  eq(sheet._grid[0][HEADER.length - 1], 'source_id', 'at the end');
+  eq(sheet._grid[0].length, HEADER.length, 'two columns added');
+  eq(sheet._grid[0][HEADER.length - 2], 'source_id', 'source_id first');
+  eq(sheet._grid[0][HEADER.length - 1], 'action_ref', 'action_ref last');
   eq(sheet._rows()[0].id, 'keep-me', 'existing row intact');
   eq(sheet._rows()[0].transcript, 'existing memo', 'existing data aligned');
   ok(logs.join('\n').includes('added source_id'), 'says what it added');
@@ -548,6 +564,139 @@ test('history ignores rows that were never routed', () => {
   const sheet = sheetWithRows([{ id: 'n1', received_at: iso(864e5), transcript: 'x', status: 'new' }]);
   const { sandbox } = loadScript({ sheet });
   eq(parse(sandbox.doGet(getEvent({ action: 'history', k: SECRET }))).rows.length, 0, 'none');
+});
+
+/* --------------------------------------------------- version 1: journal tab */
+
+test('journal appends an entry to the journal tab and hands back an entry_id', () => {
+  const sheet = sheetWithRows([{ id: 'm1', received_at: iso(1000), transcript: 'x', status: 'processing' }]);
+  const { sandbox, tabs, logs } = loadScript({ sheet });
+  const res = parse(sandbox.doPost(postEvent({
+    action: 'journal', secret: SECRET, memo_id: 'm1', kind: 'journal',
+    theme: 'a synthetic theme', entry: 'a synthetic one-line summary',
+  })));
+  eq(res.ok, true, 'ok');
+  ok(res.entry_id, 'entry_id returned');
+  const journal = tabs.journal;
+  ok(journal, 'the tab was created on first use');
+  eq(journal._grid[0].join(','), 'entry_id,memo_id,received_at,kind,theme,entry,created_at', 'header');
+  const row = journal._rows()[0];
+  eq(row.memo_id, 'm1', 'memo_id');
+  eq(row.kind, 'journal', 'kind');
+  eq(row.entry, 'a synthetic one-line summary', 'entry');
+  ok(!logs.join('\n').includes('synthetic one-line'), 'no entry text in the logs');
+});
+
+test('journal is idempotent per memo and files ideas too', () => {
+  const sheet = sheetWithRows([
+    { id: 'm1', received_at: iso(1000), transcript: 'x', status: 'processing' },
+    { id: 'm2', received_at: iso(900), transcript: 'y', status: 'processing' },
+  ]);
+  const { sandbox, tabs } = loadScript({ sheet });
+  const a = parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'm1', entry: 'one' })));
+  const b = parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'm1', entry: 'one again' })));
+  eq(b.entry_id, a.entry_id, 'the repeat returns the first entry');
+  eq(b.duplicate, true, 'and says so');
+  const c = parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'm2', kind: 'idea', entry: 'an idea' })));
+  eq(c.ok, true, 'idea filed');
+  eq(tabs.journal._rows().length, 2, 'two entries, not three');
+  eq(tabs.journal._rows()[1].kind, 'idea', 'kind idea');
+});
+
+test('journal refuses a health memo, an unknown memo, a bad kind and an empty entry', () => {
+  const sheet = sheetWithRows([
+    { id: 'h', received_at: iso(1000), transcript: 'private', status: 'done', route: 'health' },
+    { id: 'j', received_at: iso(900), transcript: 'x', status: 'processing' },
+  ]);
+  const { sandbox, tabs, logs } = loadScript({ sheet });
+  const health = parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'h', entry: 'private summary' })));
+  eq(health.ok, false, 'health refused (rule 10)');
+  ok(!logs.join('\n').includes('private summary'), 'refusal logs nothing from the body');
+  eq(parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'nope', entry: 'x' }))).error, 'unknown memo_id', 'unknown memo');
+  eq(parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'j', kind: 'health', entry: 'x' }))).error, 'bad kind', 'bad kind');
+  eq(parse(sandbox.doPost(postEvent({ action: 'journal', secret: SECRET, memo_id: 'j', entry: '   ' }))).error, 'no entry', 'empty entry');
+  ok(!tabs.journal || tabs.journal._rows().length === 0, 'nothing appended by any refusal');
+  eq(parse(sandbox.doPost(postEvent({ action: 'journal', memo_id: 'j', entry: 'x' }))).error, 'unauthorized', 'no secret, no entry (rule 4)');
+});
+
+test('a dm_ts the Sheet turned into a number comes back as a six-decimal string', () => {
+  const sheet = sheetWithRows([
+    { id: 'n1', received_at: iso(2000), transcript: 'x', status: 'asked', route: 'task',
+      dm_ts: 1788904236.64639, processed_at: iso(1500) },
+    { id: 'n2', received_at: iso(2000), transcript: 'x', status: 'asked', route: 'task',
+      dm_ts: '1788908607.4', processed_at: iso(1500) },
+  ]);
+  const { sandbox } = loadScript({ sheet });
+  const res = parse(sandbox.doGet(getEvent({ action: 'asked', k: SECRET })));
+  eq(res.rows[0].dm_ts, '1788904236.646390', 'number padded to six decimals');
+  eq(res.rows[1].dm_ts, '1788908607.400000', 'short string padded too');
+  const ping = parse(sandbox.doGet(getEvent({ action: 'ping', k: SECRET })));
+  eq(ping.asked.map((a) => `${a.id}:${a.ts}`).join(','), 'n1:1788904236.646390,n2:1788908607.400000', 'ping pairs id with ts');
+});
+
+test('id-like cells are written with the plain-text format so nothing is rounded', () => {
+  const sheet = makeSheet(HEADER);
+  const { sandbox } = loadScript({ sheet });
+  sandbox.doPost(postEvent(appBody()));
+  const dmCol = HEADER.indexOf('dm_ts') + 1;
+  const idCol = HEADER.indexOf('id') + 1;
+  eq(sheet._format(2, idCol), '@', 'id cell is text on append');
+  eq(sheet._format(2, dmCol), '@', 'dm_ts cell is text on append');
+  const id = sheet._rows()[0].id;
+  parse(sandbox.doGet(getEvent({ action: 'claim', k: SECRET, run_id: 'r' })));
+  parse(sandbox.doPost(postEvent({ action: 'complete', secret: SECRET, id, status: 'asked', dm_ts: '1788904236.646390' })));
+  eq(sheet._rows()[0].dm_ts, '1788904236.646390', 'stored as the string given');
+  eq(sheet._format(2, dmCol), '@', 'still text after the row was rewritten');
+
+  const fresh = makeSheet([]);
+  loadScript({ sheet: fresh }).sandbox.setupSheet();
+  eq(fresh._format(500, dmCol), '@', 'setupSheet formats the whole dm_ts column');
+});
+
+test('asked lists rows waiting on a reply, with dm_ts, and ping carries the timestamps', () => {
+  const sheet = sheetWithRows([
+    { id: 'a1', received_at: iso(2000), transcript: 'the dated task', status: 'asked', route: 'task',
+      dm_ts: '1725.100', processed_at: iso(1500), action_summary: 'Proposed a card' },
+    { id: 'a2', received_at: iso(2000), transcript: 'x', status: 'asked', route: 'ask', processed_at: iso(1500) },
+    { id: 'd', received_at: iso(2000), transcript: 'x', status: 'done', route: 'task', dm_ts: '1725.200' },
+    { id: 'old', received_at: iso(60 * 864e5), transcript: 'x', status: 'asked', route: 'task',
+      dm_ts: '1725.300', processed_at: iso(60 * 864e5) },
+  ]);
+  const { sandbox } = loadScript({ sheet });
+  const res = parse(sandbox.doGet(getEvent({ action: 'asked', k: SECRET })));
+  eq(res.rows.length, 1, 'only the asked row that has a dm_ts and is inside 30 days');
+  eq(res.rows[0].id, 'a1', 'the right one');
+  eq(res.rows[0].dm_ts, '1725.100000', 'dm_ts, padded to the Slack shape');
+  eq(res.rows[0].transcript, 'the dated task', 'transcript included by default');
+  const noText = parse(sandbox.doGet(getEvent({ action: 'asked', k: SECRET, include_transcript: '0' })));
+  eq(noText.rows[0].transcript, undefined, 'withheld on request');
+  eq(sheet._rows()[0].status, 'asked', 'nothing changed');
+
+  const ping = parse(sandbox.doGet(getEvent({ action: 'ping', k: SECRET })));
+  eq(ping.asked_ts.join(','), '1725.100000,1725.300000', 'ping lists asked dm_ts values, and nothing else about them');
+  ok(/^\d{4}-\d{2}-\d{2}\./.test(ping.version), 'ping reports the script version');
+  ok(!JSON.stringify(ping).includes('dated task'), 'no text in ping');
+});
+
+test('complete records action_ref and history returns it', () => {
+  const sheet = sheetWithRows([{ id: 'a', received_at: iso(1000), transcript: 'x', status: 'processing', attempts: 1 }]);
+  const { sandbox } = loadScript({ sheet });
+  const res = parse(sandbox.doPost(postEvent({
+    action: 'complete', secret: SECRET, id: 'a', status: 'done', route: 'task',
+    action_summary: 'Created a card', action_ref: 'https://trello.com/c/synthetic',
+  })));
+  eq(res.ok, true, 'ok');
+  eq(sheet._rows()[0].action_ref, 'https://trello.com/c/synthetic', 'action_ref stored');
+  const hist = parse(sandbox.doGet(getEvent({ action: 'history', k: SECRET, route: 'task' })));
+  eq(hist.rows[0].action_ref, 'https://trello.com/c/synthetic', 'history carries it');
+});
+
+test('setupSheet creates the journal tab alongside memo_inbox', () => {
+  const fresh = makeSheet([]);
+  const { sandbox, tabs } = loadScript({ sheet: fresh });
+  sandbox.setupSheet();
+  ok(tabs.journal, 'journal tab exists');
+  eq(tabs.journal._grid[0][0], 'entry_id', 'with its header');
 });
 
 /* ----------------------------------------------------------------- rule 12 */
