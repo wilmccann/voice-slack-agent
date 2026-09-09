@@ -24,7 +24,7 @@
           "trello_create_card",
           "slack_schedule_reminder"
         ],
-        "needs_confirmation": true
+        "needs_confirmation": false
       }
     },
     {
@@ -48,7 +48,7 @@
         "writes_planned_exclude": [
           "slack_schedule_reminder"
         ],
-        "needs_confirmation": true
+        "needs_confirmation": false
       }
     },
     {
@@ -144,8 +144,7 @@
           "[Cc]ancel",
           "vet"
         ],
-        "writes_planned_empty": true,
-        "needs_confirmation": true
+        "writes_planned_empty": true
       }
     },
     {
@@ -236,7 +235,7 @@
         "writes_planned_include": [
           "trello_create_card"
         ],
-        "needs_confirmation": true
+        "needs_confirmation": false
       }
     }
   ]
