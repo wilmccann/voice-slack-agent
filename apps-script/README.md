@@ -42,11 +42,15 @@ is deliberate: an unconfigured deployment is not an open one.
 ## 3. Create the sheet tab
 
 In the Apps Script editor, select `setupSheet` from the function dropdown and press
-**Run**. Approve the authorisation prompt. It creates the `memo_inbox` tab with the 18
-columns in `SPEC.md` 3.3 and freezes the header.
+**Run**. Approve the authorisation prompt. It creates the `memo_inbox` tab with the 19
+columns in `SPEC.md` 3.3 and freezes the header, and, since version 1, the `journal`
+tab beside it.
 
 Run it again after any update that adds a column. On a sheet that already has data
 it appends only the columns that are missing, at the end, and leaves every row alone.
+It also sets the plain-text format on the `id`, `dm_ts`, `source_id` and `action_ref`
+columns, so a Slack timestamp is never rounded: a number cell keeps 15 significant
+digits and a Slack timestamp has 16.
 The `source_id` column added on 2026-09-08 arrives this way; until it exists the
 receiver appends every upload as before. The same run fills `source_id` on rows written
 before the column existed, from the `recording_id` kept in their `raw_json`, so the
@@ -124,11 +128,13 @@ not the text.
 | `POST` with a transcript | Appends a row with `status=new`. Returns `{ok, id}`. A repeat of a `recording_id` already in the Sheet appends nothing and returns `{ok, id, duplicate: true}` with the existing row's id. |
 | `GET ?action=claim` | Returns the oldest unhandled rows and marks them `processing` in the same locked step. A repeat with the same `run_id` returns the rows that run already holds, so a lost answer can be retried. Also returns stale claims to `new` and parks rows that have failed three times. |
 | `GET ?action=history` | Recent processed rows, for health patterns and task updates. Returns `action_summary`, not the transcript, unless asked. |
-| `POST ?action=complete` | Writes the outcome of one row. |
-| `GET ?action=ping` | Row counts by status and `pending`, the number a claim would take now. No memo content. The run wrapper polls this every few minutes. |
+| `POST ?action=complete` | Writes the outcome of one row, including `action_ref` (version 1). |
+| `POST ?action=journal` | Version 1. Appends a journal entry or a filed idea to the `journal` tab. One per memo; a repeat returns the existing entry. Refuses a memo whose row is marked `health` (rule 10). |
+| `GET ?action=asked` | Version 1. Rows waiting on a reply from Will, each with the `dm_ts` its thread hangs off. Changes nothing. |
+| `GET ?action=ping` | Row counts by status, `pending` (the number a claim would take now) and `asked_ts` (the DM timestamps of rows waiting on a reply). No memo content. The run wrapper polls this every few minutes. |
 
-The agent never calls these directly. `mcp/sheet-server.js` wraps them as the three
-tools `SPEC.md` 5.2 names.
+The agent never calls these directly. `mcp/sheet-server.js` wraps them as the tools
+`SPEC.md` 5.2 and section 6 name.
 
 ## Retention
 

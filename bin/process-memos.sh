@@ -15,9 +15,10 @@
 #   2   this script never loads the dotenv file into its own environment. The
 #       two MCP servers read their own credentials, so no secret is ever in a
 #       variable that a stray echo or a crash dump could print.
-#   5   the agent gets five tools and no others: three Sheet tools, one DM tool,
-#       one web search. No Bash, no file access, no other MCP server. See the
-#       tools section below for the three flags that make that true.
+#   5   the agent gets exactly the tools SPEC.md 5.2 and section 6 name and no
+#       others: the Sheet tools, the Slack tools, one Trello tool, one web
+#       search. No Bash, no file access, no other MCP server. See the tools
+#       section below for the three flags that make that true.
 #  11   the log line carries counts and a duration. Never memo text.
 #
 # Usage:
@@ -100,19 +101,33 @@ trap 'rm -rf "$LOCK_DIR"' EXIT INT TERM
 # logging every empty one would bury the lines that matter. A failed check is logged
 # once per occurrence and treated as "nothing to do"; the next minute tries
 # again, and a row is never lost by waiting.
+#
+# Version 1 adds a second question: is any asked row waiting on the agent
+# because Will replied in its thread? The Sheet check returns the DM
+# timestamps of asked rows; the Slack server is asked, in one more process,
+# how many of those threads end with a message from Will. Only then is a run
+# worth a model call.
 if [ "$FORCE" != "1" ] && [ "$DRY_RUN" != "1" ]; then
-  PENDING="$(node "$ROOT/mcp/sheet-server.js" --pending 2>"$LOG_DIR/last-ping.stderr")"
+  PING="$(node "$ROOT/mcp/sheet-server.js" --pending 2>"$LOG_DIR/last-ping.stderr")"
   PING_STATUS=$?
+  PENDING="$(printf '%s' "$PING" | jq -r '.pending // empty' 2>/dev/null)"
   if [ "$PING_STATUS" -ne 0 ] || ! [[ "$PENDING" =~ ^[0-9]+$ ]]; then
     log_line "{\"t\":\"$(date -u +%FT%TZ)\",\"event\":\"ping_failed\",\"exit\":$PING_STATUS}"
     [ "$VERBOSE" = "1" ] && echo "precheck failed; see $LOG_DIR/last-ping.stderr" >&2
     exit 0
   fi
-  if [ "$PENDING" -eq 0 ]; then
-    [ "$VERBOSE" = "1" ] && echo "nothing pending; not launching the agent"
+  REPLIES=0
+  # id:ts per asked row; the id lets the Slack server recover a rounded ts.
+  ASKED_TS="$(printf '%s' "$PING" | jq -r '[.asked // [] | .[] | ((.id // "") + ":" + .ts)] | join(",")' 2>/dev/null)"
+  if [ "$PENDING" -eq 0 ] && [ -n "$ASKED_TS" ]; then
+    REPLIES="$(node "$ROOT/mcp/slack-server.js" --reply-count "$ASKED_TS" 2>>"$LOG_DIR/last-ping.stderr")"
+    [[ "$REPLIES" =~ ^[0-9]+$ ]] || REPLIES=0
+  fi
+  if [ "$PENDING" -eq 0 ] && [ "$REPLIES" -eq 0 ]; then
+    [ "$VERBOSE" = "1" ] && echo "nothing pending and no replies; not launching the agent"
     exit 0
   fi
-  [ "$VERBOSE" = "1" ] && echo "$PENDING pending; launching the agent"
+  [ "$VERBOSE" = "1" ] && echo "$PENDING pending, $REPLIES replied; launching the agent"
 fi
 
 # ------------------------------------------------------------------ the tools
@@ -129,9 +144,9 @@ fi
 #                        makes "no shell, no file access" true rather than
 #                        merely intended.
 #
-# Verified by asking the agent to list its tools: exactly the five below come
+# Verified by asking the agent to list its tools: exactly the ones below come
 # back.
-ALLOWED_TOOLS="mcp__memo-sheet__sheet_read_new,mcp__memo-sheet__sheet_history,mcp__memo-sheet__sheet_update_row,mcp__memo-slack__slack_dm,WebSearch"
+ALLOWED_TOOLS="mcp__memo-sheet__sheet_read_new,mcp__memo-sheet__sheet_history,mcp__memo-sheet__sheet_update_row,mcp__memo-sheet__sheet_read_asked,mcp__memo-sheet__journal_append,mcp__memo-slack__slack_dm,mcp__memo-slack__slack_read_replies,mcp__memo-slack__slack_schedule_reminder,mcp__memo-trello__trello_create_card,WebSearch"
 DISALLOWED_TOOLS="Bash,Read,Write,Edit,NotebookEdit,WebFetch,Task,Agent,Glob,Grep,Artifact,Skill,Workflow,SendMessage,CronCreate,CronDelete,CronList,Monitor,PushNotification,RemoteTrigger,TaskOutput,TaskStop,EnterWorktree,ExitWorktree,DesignSync,ListAgents,ScheduleWakeup,ToolSearch,ReportFindings"
 
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -139,7 +154,9 @@ STARTED="$(date +%s)"
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "would first check:"
-  echo "  node mcp/sheet-server.js --pending    (and stop here if it prints 0)"
+  echo "  node mcp/sheet-server.js --pending             pending rows and asked dm_ts values"
+  echo "  node mcp/slack-server.js --reply-count <ts...>  only if nothing is pending"
+  echo "  (and stop here if both are 0)"
   echo "then run:"
   echo "  claude -p \"\$(cat prompts/process-new-memos.md)\" \\"
   echo "    --output-format json --max-turns $MAX_TURNS \\"
@@ -163,7 +180,7 @@ STATUS=$?
 ELAPSED=$(( $(date +%s) - STARTED ))
 
 # --------------------------------------------------------------- the log line
-# The agent's last line is {"rows":N,"done":N,"asked":N,"errored":N,"skipped":N}. Pull the
+# The agent's last line is {"rows":N,"done":N,"asked":N,"errored":N,"skipped":N,"replied":N}. Pull the
 # counts out of it, and record nothing else from its output (rule 11).
 # total_cost_usd is what the run would have cost at API rates. It is the number
 # to look at before deciding whether the agent can move off the subscription
@@ -176,7 +193,7 @@ if command -v jq >/dev/null 2>&1; then
   result="$(printf '%s' "$OUTPUT" | jq -r '.result // empty' 2>/dev/null)"
   counts="$(printf '%s' "$result" \
     | grep -o '{[^{}]*"rows"[^{}]*}' | tail -1 \
-    | jq -c '{rows,done,asked,errored,skipped}' 2>/dev/null || echo '{}')"
+    | jq -c '{rows,done,asked,errored,skipped,replied}' 2>/dev/null || echo '{}')"
   [ -z "$counts" ] && counts='{}'
 fi
 
