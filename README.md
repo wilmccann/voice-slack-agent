@@ -18,11 +18,12 @@ tools by being right for a week.
 | Path | What it is |
 | --- | --- |
 | `apps-script/Code.gs` | The webhook and the queue API. One Apps Script project bound to the Sheet. |
-| `mcp/sheet-server.js` | The three Sheet tools, as an MCP server the agent can call. |
-| `mcp/slack-server.js` | The one write tool: a DM to one person, enforced at the tool boundary. |
+| `mcp/sheet-server.js` | The Sheet tools, as an MCP server the agent can call. Version 1 adds the journal write and the asked-rows read. |
+| `mcp/slack-server.js` | A DM to one person, enforced at the tool boundary. Version 1 adds scheduled reminders into, and reading replies from, that same DM. |
 | `prompts/process-new-memos.md` | **The agent.** Routing rules, run procedure, DM format, and the list of things it must never do. |
 | `bin/process-memos.sh` | One run: take the lock, run the agent with exactly five tools, write one log line. |
 | `bin/uninstall-launchagent.sh` | Remove the timer. The Sheet, the deployment and the logs are left alone. |
+| `mcp/trello-server.js` | Version 1. One tool: create a card in one configured list. `--lists` prints your boards and lists so you can pick it. |
 | `bin/install-launchagent.sh` | Installs the fifteen-minute timer. |
 | `bin/check.sh` | Runs everything that can be checked without deploying. |
 | `fixtures/test-set.json` | The twelve routing cases from `SPEC.md` section 7, synthetic. Case 13 tests the receiver instead. |
@@ -83,6 +84,36 @@ the agent, so an idle firing costs one small request and no tokens.
 runs. `bin/uninstall-launchagent.sh` stops it and touches nothing else.
 `bin/process-memos.sh --force` runs the agent without the check.
 
+**7. Version 1: let it write (optional, `add-write-tools` branch).**
+
+Three write tools, each behind the rule that anything outside the DM and the audit
+Sheet is proposed first and created only after you reply "yes" in the DM thread
+(`CLAUDE.md` rule 15). Journal entries and ideas file straight into a `journal` tab
+of the audit Sheet at high confidence. To turn the rest on:
+
+- **Slack:** add the `im:history` scope to the Memo Router app and reinstall it, so
+  the agent can read your replies in the DM thread. That is the only new scope.
+  Then, under **App Home**, turn on the **Messages Tab** and tick "Allow users to
+  send Slash commands and messages from the messages tab"; without it Slack shows
+  "Sending messages to this app has been turned off" and you cannot reply. No
+  reinstall is needed for that one. Reminders need nothing new: they are messages
+  scheduled into the same DM.
+- **Trello:** create a Power-Up at https://trello.com/power-ups/admin, generate a
+  token from its API key page, and put both in the dotenv file. Then find the list
+  that should receive task cards:
+
+  ```bash
+  node mcp/trello-server.js --lists
+  ```
+
+  and put its id in `TRELLO_LIST_ID`. The token can write to every board you can;
+  the narrowing to one list is done in `mcp/trello-server.js` (rule 5).
+- **Apps Script:** paste the new `Code.gs`, run `setupSheet` again (it adds the
+  `action_ref` column and the `journal` tab), and deploy a new version.
+
+Until the Trello values are set, a proposed card that you confirm is answered with
+"not configured yet" in the thread, and the row is marked done.
+
 ## Watching it
 
 `logs/runs.log` gets one line per agent run (an empty poll writes nothing): a timestamp, a run id, an exit code, a
@@ -132,5 +163,7 @@ unchanged rather than obeyed. Health memos never leave the DM and the Sheet.
   (`SPEC.md` section 9, rule 12).
 - **Trello and calendar reads.** Optional in version 0. The prompt uses them only if
   they are present.
-- **Everything in version 1 and 2:** write tools, the reply loop, and the move to a
-  Lambda. `SPEC.md` sections 6 and 4.3.
+- **Version 1, on `main`.** The write tools and the reply loop are built on the
+  `add-write-tools` branch (step 7 above, `SPEC.md` section 6) and wait for a week of
+  version 0 being right before they merge.
+- **Version 2:** the move to a Lambda. `SPEC.md` section 4.3.

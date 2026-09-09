@@ -176,6 +176,21 @@ function check(memo, decision) {
     fails.push(`DM matches none of: ${e.dm_matches_any.join(', ')}`);
   }
 
+  // Version 1: which writes the memo calls for, and whether they wait for a reply.
+  const writes = Array.isArray(decision.writes_planned) ? decision.writes_planned : [];
+  for (const w of e.writes_planned_include || []) {
+    if (!writes.includes(w)) fails.push(`writes_planned lacks "${w}" (got ${writes.join(', ') || 'none'})`);
+  }
+  for (const w of e.writes_planned_exclude || []) {
+    if (writes.includes(w)) fails.push(`writes_planned must not include "${w}"`);
+  }
+  if (e.writes_planned_empty && writes.length) {
+    fails.push(`writes_planned must be empty (got ${writes.join(', ')})`);
+  }
+  if (typeof e.needs_confirmation === 'boolean' && decision.needs_confirmation !== e.needs_confirmation) {
+    fails.push(`needs_confirmation is ${JSON.stringify(decision.needs_confirmation)}, expected ${e.needs_confirmation}`);
+  }
+
   const got = decision.extracted || {};
   for (const [field, want] of Object.entries(e.extracted || {})) {
     if (field === 'question_matches') {

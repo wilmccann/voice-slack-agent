@@ -8,6 +8,10 @@
  *   GET   ?action=claim      return and claim new rows  -> status=processing
  *   GET   ?action=history    recent processed rows, for pattern and update checks
  *   POST  ?action=complete   write the outcome of one row
+ *   POST  ?action=journal    version 1: append a journal entry or a filed idea
+ *                            to the "journal" tab of the same Sheet
+ *   GET   ?action=asked      version 1: rows waiting on Will's reply, with the
+ *                            DM timestamp the reply thread hangs off
  *   GET   ?action=ping       liveness and counts by status, no memo content;
  *                            "pending" is what a claim would return right now
  *
@@ -29,6 +33,43 @@
 var SHEET_NAME = 'memo_inbox';
 
 /**
+ * Reported by ping, so `node mcp/sheet-server.js --pending` can say which
+ * version of this file is actually deployed.  Bump it when an action is added
+ * or a column changes, because "I redeployed" and "the new code is live" have
+ * turned out to be different things.
+ */
+var SCRIPT_VERSION = '2026-09-08.v1b';
+
+/**
+ * Columns that must never be read back as numbers.  Sheets keeps 15
+ * significant digits in a number and a Slack timestamp has 16, so a dm_ts
+ * stored as a number loses its last digit for good (found 2026-09-08: every
+ * reply lookup answered thread_not_found).  These cells get the plain-text
+ * number format before anything is written into them.
+ */
+var TEXT_COLUMNS = ['id', 'dm_ts', 'action_ref', 'source_id'];
+
+/**
+ * Version 1 (2026-09-08): journal entries and filed ideas land in a second tab
+ * of the same Sheet.  SPEC.md section 6 left the choice between a Google Doc
+ * and a second tab open; a tab needs no new Google scope (rule 5) and keeps
+ * the content inside the one audit Sheet that rule 8 already allows.  Health
+ * memos are never written here (rule 10); handleJournal refuses them.
+ */
+var JOURNAL_SHEET_NAME = 'journal';
+var JOURNAL_COLUMNS = [
+  'entry_id',
+  'memo_id',
+  'received_at',
+  'kind',
+  'theme',
+  'entry',
+  'created_at'
+];
+var JOURNAL_KINDS = ['journal', 'idea'];
+var MAX_ENTRY_CHARS = 4000;
+
+/**
  * Column order in the Sheet.  Matches SPEC.md 3.3, plus three operational
  * columns the status machine needs and 3.3 did not name:
  *   claimed_at  when a run took the row, so a stale claim can be detected
@@ -39,6 +80,11 @@ var SHEET_NAME = 'memo_inbox';
  *               instead of appending another (added 2026-09-08, after the
  *               phone app retried every POST that Apps Script answered
  *               with a 302 and left about seven rows per memo)
+ *   action_ref  version 1: what the agent created for this memo, as a
+ *               reference and never as content: a Trello card URL, a Slack
+ *               scheduled message id, or a journal entry id.  Blank when the
+ *               memo was only proposed.  This is how a later "cancel that"
+ *               can find what to cancel.
  * New columns go at the end: setupSheet() adds any that are missing to a
  * sheet that already has data, and appendRow() maps by header name.
  */
@@ -60,7 +106,8 @@ var COLUMNS = [
   'processed_at',
   'error',
   'answer_to',
-  'source_id'
+  'source_id',
+  'action_ref'
 ];
 
 /** Field mapping for the inbound POST (SPEC.md 3.1).  First key present wins. */
@@ -97,8 +144,10 @@ function doPost(e) {
   try {
     if (action === 'memo') return handleMemo(e, body);
     if (action === 'complete') return handleComplete(e, body);
+    if (action === 'journal') return handleJournal(e, body);
     if (action === 'claim') return handleClaim(e, body);
     if (action === 'history') return handleHistory(e, body);
+    if (action === 'asked') return handleAsked(e, body);
     if (action === 'ping') return handlePing(e, body);
     return json({ ok: false, error: 'unknown action' });
   } catch (err) {
@@ -114,6 +163,7 @@ function doGet(e) {
     if (action === 'ping') return handlePing(e, body);
     if (action === 'claim') return handleClaim(e, body);
     if (action === 'history') return handleHistory(e, body);
+    if (action === 'asked') return handleAsked(e, body);
     return json({ ok: false, error: 'unknown action' });
   } catch (err) {
     console.error('action=' + action + ' failed: ' + err);
@@ -328,6 +378,7 @@ function handleHistory(e, body) {
       route: route,
       confidence: r.get('confidence'),
       action_summary: r.get('action_summary'),
+      action_ref: r.get('action_ref'),
       status: r.get('status')
     };
     if (withText) item.transcript = r.get('transcript');
@@ -361,7 +412,7 @@ function handleComplete(e, body) {
 
     r.set('status', status);
     r.set('processed_at', nowIso());
-    ['route', 'confidence', 'action_summary', 'dm_ts', 'error', 'answer_to']
+    ['route', 'confidence', 'action_summary', 'dm_ts', 'error', 'answer_to', 'action_ref']
       .forEach(function (f) {
         if (d[f] !== undefined && d[f] !== null) r.set(f, String(d[f]));
       });
@@ -376,6 +427,143 @@ function handleComplete(e, body) {
 }
 
 /**
+ * Version 1: the rows waiting on Will.  A row is "asked" when the agent sent a
+ * DM that proposes something and needs a reply (rule 15).  The reply arrives
+ * as a Slack thread under that DM, so each row comes back with its dm_ts.
+ *
+ * The transcript is included by default, because a reply is resolved by
+ * re-running the decision with the reply as context (SPEC.md section 6), and
+ * that needs the memo.  Nothing here changes a row.
+ */
+function handleAsked(e, body) {
+  if (!authorised(e, body.data)) return reject('asked');
+  var days = Number(param(e, 'days') || 30) || 30;
+  var withText = param(e, 'include_transcript') !== '0';
+  var since = Date.now() - days * 24 * 60 * 60 * 1000;
+
+  var t = table();
+  var out = [];
+  for (var i = 0; i < t.rows.length; i++) {
+    var r = t.rows[i];
+    if (String(r.get('status') || '') !== 'asked') continue;
+    if (!r.get('dm_ts')) continue;
+    var when = timeOf(r.get('processed_at') || r.get('received_at'));
+    if (when && when < since) continue;
+    var item = {
+      id: r.get('id'),
+      received_at: r.get('received_at'),
+      asked_at: r.get('processed_at'),
+      dm_ts: slackTs(r.get('dm_ts')),
+      route: r.get('route'),
+      confidence: r.get('confidence'),
+      action_summary: r.get('action_summary'),
+      action_ref: r.get('action_ref')
+    };
+    if (withText) item.transcript = r.get('transcript');
+    out.push(item);
+  }
+  console.info('asked days=' + days + ' returned=' + out.length);
+  return json({ ok: true, rows: out });
+}
+
+/**
+ * Version 1: append one journal entry or filed idea.  Body: memo_id, kind
+ * ("journal" or "idea"), theme (one line), entry (the summary).  The memo row
+ * must exist and must not be a health memo (rule 10): a row already marked
+ * route=health is refused, and so is a row whose transcript this run has not
+ * yet routed if the caller says it is health.  The entry is the agent's
+ * summary, not the transcript, which stays in memo_inbox.
+ *
+ * Returns {ok, entry_id}.  entry_id goes into the memo row's action_ref.
+ */
+function handleJournal(e, body) {
+  if (!authorised(e, body.data)) return reject('journal');
+
+  var d = body.data;
+  var memoId = String(d.memo_id || '');
+  var kind = String(d.kind || 'journal');
+  var theme = String(d.theme || '').trim();
+  var entry = String(d.entry || '').trim();
+
+  if (!memoId) return json({ ok: false, error: 'no memo_id' });
+  if (JOURNAL_KINDS.indexOf(kind) === -1) return json({ ok: false, error: 'bad kind' });
+  if (!entry) return json({ ok: false, error: 'no entry' });
+  entry = entry.slice(0, MAX_ENTRY_CHARS);
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var t = table();
+    var r = t.byId(memoId);
+    if (!r) return json({ ok: false, error: 'unknown memo_id' });
+    if (String(r.get('route') || '') === 'health') {
+      console.warn('journal refused memo_id=' + memoId + ' reason=health (rule 10)');
+      return json({ ok: false, error: 'health memos are never journaled' });
+    }
+
+    // One entry per memo: a retried call returns the entry it already made.
+    var js = journalSheet();
+    var existing = findJournalEntry(js, memoId);
+    if (existing) {
+      console.info('journal duplicate memo_id=' + memoId + ' entry_id=' + existing);
+      return json({ ok: true, entry_id: existing, duplicate: true });
+    }
+
+    var row = {
+      entry_id: Utilities.getUuid(),
+      memo_id: memoId,
+      received_at: r.get('received_at'),
+      kind: kind,
+      theme: theme,
+      entry: entry,
+      created_at: nowIso()
+    };
+    var header = js.getRange(1, 1, 1, js.getLastColumn()).getValues()[0];
+    js.appendRow(header.map(function (name) {
+      var v = row[String(name)];
+      return v === undefined ? '' : v;
+    }));
+    SpreadsheetApp.flush();
+
+    // Rule 11: ids and the kind, never the entry.
+    console.info('journal stored memo_id=' + memoId + ' kind=' + kind + ' entry_id=' + row.entry_id);
+    return json({ ok: true, entry_id: row.entry_id });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** The journal tab, created with its header the first time it is needed. */
+function journalSheet() {
+  var id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  var ss = id ? SpreadsheetApp.openById(id) : SpreadsheetApp.getActiveSpreadsheet();
+  var js = ss.getSheetByName(JOURNAL_SHEET_NAME);
+  if (!js) {
+    js = ss.insertSheet(JOURNAL_SHEET_NAME);
+    js.getRange(1, 1, 1, JOURNAL_COLUMNS.length).setValues([JOURNAL_COLUMNS]).setFontWeight('bold');
+    js.setFrozenRows(1);
+  } else if (js.getLastColumn() === 0) {
+    js.getRange(1, 1, 1, JOURNAL_COLUMNS.length).setValues([JOURNAL_COLUMNS]).setFontWeight('bold');
+    js.setFrozenRows(1);
+  }
+  return js;
+}
+
+function findJournalEntry(js, memoId) {
+  var lastRow = js.getLastRow();
+  if (lastRow < 2) return null;
+  var header = js.getRange(1, 1, 1, js.getLastColumn()).getValues()[0];
+  var memoCol = header.indexOf('memo_id');
+  var idCol = header.indexOf('entry_id');
+  if (memoCol === -1 || idCol === -1) return null;
+  var values = js.getRange(2, 1, lastRow - 1, header.length).getValues();
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][memoCol]) === String(memoId)) return String(values[i][idCol]);
+  }
+  return null;
+}
+
+/**
  * Counts by status, plus "pending": the rows a claim would take right now,
  * by the same rules handleClaim applies (new, or processing past the stale
  * window, or error with attempts left).  The run wrapper polls this once a
@@ -387,18 +575,30 @@ function handlePing(e, body) {
   var t = table();
   var counts = {};
   var pending = 0;
+  var askedTs = [];
+  var asked = [];
   var staleBefore = Date.now() - STALE_CLAIM_MINUTES * 60 * 1000;
   for (var i = 0; i < t.rows.length; i++) {
     var r = t.rows[i];
     var s = String(r.get('status') || 'blank');
     counts[s] = (counts[s] || 0) + 1;
+    if (s === 'asked' && r.get('dm_ts')) {
+      askedTs.push(slackTs(r.get('dm_ts')));
+      asked.push({ id: String(r.get('id')), ts: slackTs(r.get('dm_ts')) });
+    }
     if (s === 'new') pending++;
     else if (s === 'processing' && !r.get('processed_at')) {
       var at = timeOf(r.get('claimed_at'));
       if (!at || at < staleBefore) pending++;
     } else if (s === 'error' && Number(r.get('attempts') || 0) < MAX_ATTEMPTS) pending++;
   }
-  return json({ ok: true, sheet: SHEET_NAME, rows: t.rows.length, status: counts, pending: pending });
+  // asked: the rows waiting on a reply, as {id, ts}, so the run wrapper can
+  // ask Slack whether any thread has one before launching the agent.  The id
+  // lets Slack find the DM again if the stored timestamp is wrong.  Ids and
+  // timestamps only, no text.  asked_ts is the older shape, kept for a wrapper
+  // that has not been updated.
+  return json({ ok: true, version: SCRIPT_VERSION, sheet: SHEET_NAME, rows: t.rows.length,
+                status: counts, pending: pending, asked_ts: askedTs, asked: asked });
 }
 
 /* --------------------------------------------------------------- auth (r4) */
@@ -560,7 +760,9 @@ function table() {
       var changed = Object.keys(dirty);
       if (!changed.length) return;
       changed.forEach(function (i) {
-        sh.getRange(Number(i) + 2, 1, 1, header.length).setValues([values[Number(i)]]);
+        var rowNumber = Number(i) + 2;
+        forceTextFormat(sh, rowNumber, index);
+        sh.getRange(rowNumber, 1, 1, header.length).setValues([values[Number(i)]]);
       });
       SpreadsheetApp.flush();
     }
@@ -598,12 +800,26 @@ function storeMemo(row) {
 function appendRow(row) {
   var sh = sheet();
   var header = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  var index = {};
+  header.forEach(function (name, i) { if (name) index[String(name)] = i; });
   var line = header.map(function (name) {
     var v = row[String(name)];
     return v === undefined ? '' : v;
   });
-  sh.appendRow(line);
+  // Format the cells first, then write, so a numeric-looking id stays text.
+  var rowNumber = sh.getLastRow() + 1;
+  forceTextFormat(sh, rowNumber, index);
+  sh.getRange(rowNumber, 1, 1, header.length).setValues([line]);
   SpreadsheetApp.flush();
+}
+
+/** Plain-text format on the TEXT_COLUMNS cells of one row (see the constant). */
+function forceTextFormat(sh, rowNumber, index) {
+  TEXT_COLUMNS.forEach(function (name) {
+    var c = index[name];
+    if (c === undefined) return;
+    sh.getRange(rowNumber, c + 1).setNumberFormat('@');
+  });
 }
 
 function json(obj) {
@@ -614,6 +830,22 @@ function json(obj) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+/**
+ * A Slack timestamp as the string Slack wants: digits, a dot, six digits.  A
+ * cell written before TEXT_COLUMNS existed comes back as a number with its
+ * trailing zero, or worse its last digit, gone; this restores the shape, and
+ * the Slack server falls back to finding the DM by memo id when the value is
+ * still wrong.
+ */
+function slackTs(value) {
+  if (value === '' || value === null || value === undefined) return '';
+  if (typeof value === 'number') return value.toFixed(6);
+  var s = String(value).trim();
+  var m = s.match(/^(\d+)\.(\d{1,6})$/);
+  if (m) return m[1] + '.' + (m[2] + '000000').slice(0, 6);
+  return s;
 }
 
 /**
@@ -656,10 +888,22 @@ function setupSheet() {
   }
   sh.setFrozenRows(1);
   sh.autoResizeColumns(1, existing.length + missing.length || COLUMNS.length);
+
+  // Plain text on the id-like columns, for every row the sheet has, so
+  // nothing written later is rounded (see TEXT_COLUMNS).
+  var headerNow = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0];
+  TEXT_COLUMNS.forEach(function (name) {
+    var c = headerNow.indexOf(name);
+    if (c === -1 || sh.getMaxRows() < 2) return;
+    sh.getRange(2, c + 1, sh.getMaxRows() - 1, 1).setNumberFormat('@');
+  });
+
   var filled = backfillSourceIds();
+  journalSheet();
   console.info('setupSheet: ' + SHEET_NAME + ' has ' + (existing.length + missing.length) +
                ' columns; added ' + (missing.length ? missing.join(',') : 'none') +
-               '; source_id backfilled on ' + filled + ' rows');
+               '; source_id backfilled on ' + filled + ' rows; ' +
+               JOURNAL_SHEET_NAME + ' tab ready');
 }
 
 /**
