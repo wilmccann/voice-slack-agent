@@ -373,6 +373,8 @@ Hard limits per run: 20 rows, 40 turns, one web search per question row, one DM 
 - The run summary line gains `replied`. The precheck in 4.1 asks Slack whether any asked thread ends with a message from Will, so a reply is picked up within the same interval as a memo.
 - Not built: `calendar_read`, and the Trello read the version 0 table listed as optional.
 
+**Rule 15 loosened, 2026-09-08 (same evening).** After confirming every card by hand for an evening, Will changed the rule: a card, a reminder or a journal entry is created on its own when the row's confidence is `high` or `medium`, and the DM states exactly what was made, with the resolved date and where it came from, so a wrong one is visible at a glance. At `low` the memo is an `ask` and nothing is created. Deleting, moving or spending still asks first, and there is no tool for any of them yet: a memo that cancels or changes an earlier task names the earlier task and its `action_ref` and leaves the change to Will. `asked` now means an `ask` route waiting on context, or a proposal made in a thread after such a reply. The reply loop is unchanged. Fixtures 1, 2 and 12 expect `needs_confirmation: false`.
+
 ## 7. Test set and acceptance
 
 The ten memos in `PLAN.md` section 8 are recorded as synthetic fixtures in `fixtures/` (rule 7) and, once the receiver exists, as real POSTs.
@@ -431,6 +433,7 @@ Plus three negative cases that are not in `PLAN.md`:
 | --- | --- | --- |
 | 1 | 2026-09-04 | First draft from `PLAN.md` rev 3. Spelled out the poll-versus-push trigger, the text-only data contract, the Sheet schema and status machine, the Apps Script header limitation and the two secret-transport options, and three negative test cases. |
 | 2 | 2026-09-04 | Section 3.2 rewritten for the amended rule 4: three transports in order of preference, with the exposure of each stated honestly. |
+| 8 | 2026-09-08 | Rule 15 loosened: creates happen on their own at `high` or `medium` confidence, the DM reports exactly what was made, `low` asks, and deletes or moves still wait. Section 6 records it; fixtures 1, 2 and 12 flipped. |
 | 7 | 2026-09-08 | First live reply resolved: two "yes" replies became two Trello cards. Three things fixed on the way: the Sheet rounded `dm_ts` (3.3), the Slack read methods need query arguments not a JSON body, and the prompt's empty-inbox rule skipped the reply phase. |
 | 6 | 2026-09-08 | Version 1 built on the `add-write-tools` branch: section 6 table records what was built and the three decisions (journal tab not Doc; reminder as a scheduled DM; rule 15 means cards and reminders always ask first). 3.3 gains `action_ref` and the journal tab. |
 | 5 | 2026-09-08 | 4.1 rewritten: the timer fires every 4 minutes and the wrapper checks the Sheet with the `ping` action first, launching the agent only when a row is waiting. `ping` now reports `pending`, counted by the claim's own rules. |

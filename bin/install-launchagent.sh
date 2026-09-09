@@ -29,7 +29,7 @@ MODE="install"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --interval) INTERVAL="${2:-60}"; shift 2 ;;
+    --interval) INTERVAL="${2:-300}"; shift 2 ;;
     --status) MODE="status"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
     --help|-h) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's|^# \{0,1\}||'; exit 0 ;;

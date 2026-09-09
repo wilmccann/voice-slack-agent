@@ -194,9 +194,9 @@ const TOOLS = [
     name: 'slack_schedule_reminder',
     description:
       'Version 1 write tool. Schedule a reminder: a DM to Will, delivered at a given ' +
-      'time. Same fixed recipient as slack_dm, no other destination. Use it only after ' +
-      'Will has confirmed a dated task, or for a dateless reminder he asked for at high ' +
-      'confidence; anything with a date is proposed first. The time must be in the ' +
+      'time. Same fixed recipient as slack_dm, no other destination. Use it for a task ' +
+      'that says remind, at high or medium confidence, and state the delivery time in ' +
+      'the DM; at low confidence ask instead. The time must be in the ' +
       `future and within ${MAX_SCHEDULE_DAYS} days. Returns {scheduled_message_id, ` +
       'post_at}; put scheduled_message_id in the row as action_ref.',
     inputSchema: {

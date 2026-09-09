@@ -99,9 +99,10 @@ const TOOLS = [
     name: 'trello_create_card',
     description:
       'Version 1 write tool. Create one Trello card for a task, in the one list fixed ' +
-      'by configuration; there is no list or board argument. Use it for a task at high ' +
-      'confidence with no date, or for a dated task after Will has confirmed it. Never ' +
-      'for a health memo. Call at most once per memo. Returns {id, url, short_url}; ' +
+      'by configuration; there is no list or board argument. Use it for a new task at ' +
+      'high or medium confidence, dated or not, and tell Will in the DM exactly what ' +
+      'was created; at low confidence ask instead. Never for a health memo. Call at ' +
+      'most once per memo. Returns {id, url, short_url}; ' +
       'put short_url in the row as action_ref.',
     inputSchema: {
       type: 'object',
