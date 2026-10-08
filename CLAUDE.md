@@ -3,14 +3,14 @@
 A personal agent that routes voice memos. Will records a memo on his phone with the Webhook Voice Automation app in text mode; the transcript is POSTed to a webhook; an agent decides which of five kinds of memo it is (task, journal, mindfulness or health, question, idea), acts, and sends a Slack DM.
 
 - `PLAN.md` is the source of truth. It doubles as the handout for the Build with Claude meetup on 2026-09-05. Keep the revision log at the bottom current on every meaningful edit.
-- Version 0 is built as of 2026-09-05 and is propose-only: no write tools except the
-  Slack DM. First real run on 2026-09-08. Version 1 (write tools, confirmation rule,
-  reply loop; `SPEC.md` section 6) is built on the `add-write-tools` branch as of
-  2026-09-08 and not yet deployed or merged. `README.md` says what is where and how
-  to set it up. Open: the app retries every POST because Apps Script answers with a
-  302, so the receiver is idempotent on `recording_id` and the Lambda receiver
-  (`SPEC.md` 4.3) moves up; the LaunchAgent is not installed yet; the retention
-  period is still open.
+- Status as of 2026-10-07. Version 0 was built on 2026-09-05 and first ran on
+  2026-09-08. Version 1 (write tools, confirmation rule, reply loop; `SPEC.md`
+  section 6) merged to `main` on 2026-09-08 and is live: `Code.gs` `2026-09-08.v1b`
+  is deployed, Slack has `im:history`, Trello is configured, and the LaunchAgent
+  fires every 4 minutes. `README.md` says what is where and how to set it up. Open:
+  the app retries every POST because Apps Script answers with a 302, so the receiver
+  is idempotent on `recording_id` and the Lambda receiver (`SPEC.md` 4.3) is next;
+  the retention period is still open.
 - Health memos are private. They never leave the DM and the audit Sheet, in any version.
 - All artifacts for this work live in this folder.
 
@@ -54,9 +54,10 @@ version of the agent. Cite them by number.
    so in a header line.
 8. Memo content goes only to the sinks named in `PLAN.md`: the audit Sheet (both
    tabs) and Will's Slack DM, and from version 1 a Trello card holding the task as
-   the agent phrased it, created only after Will says yes. Sending memo content
+   the agent phrased it, created only when rule 15 allows. Sending memo content
    anywhere else, including a web search, an LLM other than the one running the
    agent, or a new connector, requires adding that sink to this list first.
+   Amended 2026-10-07 to follow rule 15; it said "only after Will says yes".
 9. The question route may search the web, but with the question only. Strip names,
    places, dates, and anything health-related from the query before it leaves.
 10. Health memos never leave the DM and the audit Sheet, in any version. They are not

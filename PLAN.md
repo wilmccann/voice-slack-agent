@@ -2,7 +2,7 @@
 
 **Owner:** Will McCann
 **For:** Build with Claude meetup, Saturday 2026-09-05
-**Status:** Revision 3, drafted 2026-09-04 with Claude Code
+**Status:** Revision 10, 2026-10-07. Drafted 2026-09-04 with Claude Code; version 1 is merged and running.
 **Project folder:** ~/projects/voice-slack-agent
 **Goal of this document:** a plan I could start building from Monday morning, and a story I can tell a room of first-time agent builders on Saturday.
 
@@ -129,7 +129,7 @@ Once the routing looks right for a week:
 - **Add a confirmation rule:** the agent acts directly on high-confidence, low-cost routes (journal, idea) and asks in the DM before anything that creates a task with a date.
 - **Add the "ask" path properly:** if I reply to the clarifying DM, the next run picks up my answer and finishes the memo.
 
-**Built 2026-09-08**, on the `add-write-tools` branch, with three decisions the bullets above left open:
+**Built 2026-09-08**, on the `add-write-tools` branch and merged to `main` the same evening, with three decisions the bullets above left open:
 
 - The journal is a second tab of the audit Sheet, not a Google Doc. No new Google scope, and the content stays inside the one Sheet rule 8 already allows. Ideas are filed to the same tab with a kind column.
 - A reminder is a Slack message scheduled into the same DM. No new Slack scope for that; the reply loop needs one, reading replies in that DM and nothing else.
@@ -171,10 +171,10 @@ Memo 10 tests the health-versus-journal rule. Memo 7 is the other interesting on
 
 ## 9. Open questions
 
-- **Partly answered.** A Claude Code cloud routine can only use connectors attached on claude.ai, not the MCP servers configured in Claude Code on my Mac, and its minimum interval is one hour. So version 0 needs Slack and Google Sheets connected on claude.ai, which I must confirm before Saturday. Fallback if that is a hassle: a launchd job on my Mac that runs `claude -p "process new memos"` every 15 minutes with the local MCP servers.
+- **Partly answered.** A Claude Code cloud routine can only use connectors attached on claude.ai, not the MCP servers configured in Claude Code on my Mac, and its minimum interval is one hour. So version 0 needs Slack and Google Sheets connected on claude.ai, which I must confirm before Saturday. Fallback if that is a hassle: a launchd job on my Mac that runs `claude -p "process new memos"` every 15 minutes with the local MCP servers. **Answered:** the launchd fallback is what runs, with three small local MCP servers of its own.
 - What is the exact JSON the app sends in text mode? Need one real POST captured before writing doPost.
 - Should journal entries also land in a Google Doc, or is the DM enough for now?
-- Hourly, or every 15 minutes? Cost is negligible either way; this is about how quickly I expect a reply.
+- Hourly, or every 15 minutes? Cost is negligible either way; this is about how quickly I expect a reply. **Answered:** every 4 minutes, with a cheap check first so an idle firing costs no tokens.
 - Does the app's text mode handle a two-minute rambling memo, or does it truncate?
 
 ## 10. What I will say on Saturday
@@ -194,6 +194,7 @@ Memo 10 tests the health-versus-journal rule. Memo 7 is the other interesting on
 | 2 | 2026-09-04 | Added the health route, a one-page summary, two test memos, and the cloud-routine constraint | Second round of questions: confirmed propose-only autonomy for v0, five routes instead of four, cloud phase stays one section, and the file should double as the meetup handout. |
 | 3 | 2026-09-04 | Data and secrets precautions added to CLAUDE.md (15 numbered rules) with enforcement: Read deny rules for .env, a Bash guard hook, and gitleaks on pre-commit | Memos are personal and some are health-related; the webhook is a public entry point. Guidance and enforcement are separated on purpose. |
 | 4 | 2026-09-04 | Rule 4 amended: the shared secret is a header where the receiver can read one, a JSON body field where it cannot (Apps Script), a query parameter only as a last resort. `SPEC.md` added as the technical specification. | Apps Script `doPost` cannot read request headers, so the original wording could not be satisfied in version 0. Swapping to a receiver that can (Make, n8n) would put a third party in the path of health memos, which is not acceptable. |
+| 10 | 2026-10-07 | Status brought up to date: version 1 and the rule 15 change were merged to `main` on 2026-09-08 and deployed, and the timer has been installed at 4 minutes since then. Rule 8 now defers to rule 15 for when a Trello card is created. Two open questions in section 9 marked answered. | The documents still described version 1 as an unmerged branch and the timer as not installed. Rule 8 still said a card waits for a "yes", which rule 15 had stopped requiring. |
 | 9 | 2026-09-08 | Rule 15 loosened: confident rows (high or medium) create their card, reminder or journal entry on their own and the DM reports it; low asks; nothing is ever deleted or moved by the agent. | One evening of replying "yes" to every card showed the confirmation was pure friction: the DM already states the task and the resolved date, which is all a confirmation would check. Deletes stay gated because a wrong one is harder to notice than a wrong card. |
 | 8 | 2026-09-08 | Version 1 built on a branch: three write tools (journal tab, Trello card, scheduled reminder), the confirmation rule, and the reply loop that reads my thread replies. Trello and the sinks list added under rule 8. | The plan said the agent earns write tools by being right for a week, and it has had one day, so this stays on a branch until the week is up. Building it now, while the version 0 decisions are fresh, was cheaper than building it later. Rule 15 turned out to decide the design: with "ask first, always" for anything outside the DM, the reply loop is not an extra, it is how the tools get used. |
 | 7 | 2026-09-08 | The timer now fires every 4 minutes and only launches the agent when a cheap check of the Sheet finds a memo waiting. A separate uninstall script removes the timer. | The 15-minute wait was the cost of launching the agent blind on every firing. Checking first costs nothing in tokens, so a memo is now handled within a couple of minutes of landing rather than up to fifteen. |

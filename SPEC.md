@@ -2,7 +2,7 @@
 
 **Owner:** Will McCann
 **Derived from:** `PLAN.md` revision 3 (2026-09-04)
-**Status:** Revision 3, 2026-09-05. Version 0 is built; see the revision log.
+**Status:** Revision 9, 2026-10-07. Version 1 is merged and running; see the revision log.
 **Scope:** Version 0 in full, with the version 1 and version 2 deltas. Where `PLAN.md` says what and why, this document says how, with exact schemas, contracts and the mechanisms behind each hop.
 **Rules:** `CLAUDE.md` rules 1 to 15 apply throughout and are cited by number.
 
@@ -38,7 +38,8 @@
  (4) Google Sheet "memo_inbox"            <- the queue AND the audit log
      id | received_at | transcript | status=new | ...
         |
-        |  (5) TIMER: launchd every 15 min runs `claude -p "process new memos"`
+        |  (5) TIMER: launchd every 4 min (was 15) checks for waiting rows,
+        |      then runs `claude -p "process new memos"` only if there are any
         |      (or a Claude Code cloud routine, hourly)
         v
  (6) Agent run (Claude Code, non-interactive)
@@ -54,7 +55,7 @@
      "[task] Call the vet, Thu 2026-09-10. Proposed, not created. Reply 'yes' to create."
 ```
 
-Steps 1 to 4 happen within about a second of the memo ending. Step 5 is the only wait: up to 15 minutes local, up to 60 minutes on the cloud routine. Steps 6 and 7 take 10 to 60 seconds per run depending on how many rows are new and whether the question route searched the web.
+Steps 1 to 4 happen within about a second of the memo ending. Step 5 is the only wait: up to ~~15~~ 4 minutes local, up to 60 minutes on the cloud routine. Steps 6 and 7 take 10 to 60 seconds per run depending on how many rows are new and whether the question route searched the web.
 
 ### 1.2 Version 2 (push)
 
@@ -85,7 +86,7 @@ sequenceDiagram
     A->>A: check secret (rule 4)
     A->>S: append row status=new
     A-->>W: 200 {ok, id}
-    Note over S: waits up to 15 min
+    Note over S: waits up to 4 min (was 15)
     T->>C: start run
     C->>S: read rows status=new
     C->>S: claim: status=processing, run_id
@@ -256,7 +257,7 @@ Health DMs never include a comparison to anything outside the Sheet, and are nev
   1. takes a lock (`mkdir` on a lock directory; exits if it exists and is younger than 30 minutes) so two runs never overlap;
   2. loads nothing from `.env` into the shell that could be echoed (rule 2); MCP servers read their own credentials;
   3. (added 2026-09-08) asks the web app's `ping` action, through `mcp/sheet-server.js --pending`, how many rows a claim would take right now, and exits silently if the answer is zero. This is one small HTTPS request and no model call. A failed check is logged and treated as zero; the next firing tries again;
-  4. runs `claude -p "$(cat prompts/process-new-memos.md)" --output-format json --max-turns 40 --allowedTools <the six tools in 5.2>`;
+  4. runs `claude -p "$(cat prompts/process-new-memos.md)" --output-format json --max-turns 40 --allowedTools <~~the six tools in 5.2~~ the ten built in 5.2 and 6>`;
   5. appends one line per agent run to `logs/runs.log`: timestamp, rows claimed, rows done, rows asked, rows errored, rows skipped, and the API-equivalent cost. No transcript text (rule 11). Empty polls write nothing.
 - The prompt file is the whole agent. It is version-controlled; the DM examples in 3.5, the route table in 5.1 and the rules in `CLAUDE.md` are all in it.
 - ~~Cost of an empty run (no new rows) is one Sheet read and a few hundred tokens. 96 runs a day is fine.~~ Cost of an empty poll is one Apps Script execution and no tokens. 360 a day at the 4-minute default costs nothing in tokens and a few minutes of Apps Script's daily runtime quota; even once a minute (1,440) stays inside the consumer-account limit.
@@ -282,7 +283,7 @@ Why launchd rather than cron: it survives sleep and wake on a Mac, runs missed i
 | | v0 local launchd | v0 cloud routine | v2 Lambda |
 | --- | --- | --- | --- |
 | Mechanism | timer -> poll Sheet | timer -> poll Sheet | HTTP push -> handler |
-| Latency after memo | up to 15 min | up to 60 min | seconds |
+| Latency after memo | up to ~~15~~ 4 min | up to 60 min | seconds |
 | Needs Mac awake | yes | no | no |
 | Tools available | local MCP servers | claude.ai connectors | whatever the handler implements |
 | Infrastructure | none | none | Lambda, CDK, Secrets Manager |
@@ -357,7 +358,7 @@ Hard limits per run: 20 rows, 40 turns, one web search per question row, one DM 
 - **Reply loop:** the run reads Slack thread replies on each `asked` row's `dm_ts` (Slack read-thread tool). A reply of "create", "yes" or a correction resolves the row: the agent re-runs the decision with the reply as extra context, acts, writes `answer_to`, sets `done`. A reply is Will's instruction, not memo text, so rule 13 does not apply to it; but it is still only allowed to trigger the tools in the route's allow-list.
 - **New status:** none. `asked` already exists; `answer_to` is the only new column.
 
-**Built 2026-09-08** on the `add-write-tools` branch. Where the build differs from the four bullets:
+**Built 2026-09-08** on the `add-write-tools` branch, and merged to `main` the same evening (PR #1, then PR #2 for the rule 15 change below). Live since: `Code.gs` `2026-09-08.v1b`, `im:history` granted, Trello list configured. Where the build differs from the four bullets:
 
 | Tool name in prompt | Backing | Write | Route | When |
 | --- | --- | --- | --- | --- |
@@ -419,7 +420,7 @@ Plus three negative cases that are not in `PLAN.md`:
 | Exact JSON the app sends | Closed 2026-09-06: see 3.1 |
 | Secret transport | Closed 2026-09-06: transport A, a body field the app adds |
 | Apps Script redirect on POST | Closed 2026-09-06, badly: the row lands but the app retries forever. Receiver deduplicates since 2026-09-08; the Lambda (4.3) is the real fix and is now next |
-| 15 minutes or hourly | 4.1 chooses 15 minutes locally; hourly is forced on the cloud routine |
+| 15 minutes or hourly | 4.1 chose 15 minutes locally, now 4 with the precheck (installed 2026-09-08); hourly is forced on the cloud routine |
 | Journal to a Google Doc? | deferred to v1 (`journal_append`) |
 | Two-minute memo truncated? | `capture.log` shape line, `string(N chars)` |
 | Slack and Sheets connected on claude.ai | only needed for 4.2; not a v0 blocker on the launchd path. Closed for 4.1 a different way: neither is an MCP server on the Mac, so `mcp/sheet-server.js` and `mcp/slack-server.js` were built instead (5.2). |
@@ -433,6 +434,7 @@ Plus three negative cases that are not in `PLAN.md`:
 | --- | --- | --- |
 | 1 | 2026-09-04 | First draft from `PLAN.md` rev 3. Spelled out the poll-versus-push trigger, the text-only data contract, the Sheet schema and status machine, the Apps Script header limitation and the two secret-transport options, and three negative test cases. |
 | 2 | 2026-09-04 | Section 3.2 rewritten for the amended rule 4: three transports in order of preference, with the exposure of each stated honestly. |
+| 9 | 2026-10-07 | Status caught up with what runs: version 1 merged to `main` on 2026-09-08 and deployed (section 6), the LaunchAgent installed at 4 minutes (section 9). Leftover 15-minute figures in 1.1, 1.3 and 4.4 changed to 4, and the tool count in 4.1 to ten. |
 | 8 | 2026-09-08 | Rule 15 loosened: creates happen on their own at `high` or `medium` confidence, the DM reports exactly what was made, `low` asks, and deletes or moves still wait. Section 6 records it; fixtures 1, 2 and 12 flipped. |
 | 7 | 2026-09-08 | First live reply resolved: two "yes" replies became two Trello cards. Three things fixed on the way: the Sheet rounded `dm_ts` (3.3), the Slack read methods need query arguments not a JSON body, and the prompt's empty-inbox rule skipped the reply phase. |
 | 6 | 2026-09-08 | Version 1 built on the `add-write-tools` branch: section 6 table records what was built and the three decisions (journal tab not Doc; reminder as a scheduled DM; rule 15 means cards and reminders always ask first). 3.3 gains `action_ref` and the journal tab. |

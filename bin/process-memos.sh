@@ -131,12 +131,12 @@ if [ "$FORCE" != "1" ] && [ "$DRY_RUN" != "1" ]; then
 fi
 
 # ------------------------------------------------------------------ the tools
-# SPEC.md 5.2, exactly. Three things narrow the surface, and all three are
-# needed:
+# SPEC.md 5.2 and 6, exactly. Three things narrow the surface, and all three
+# are needed:
 #
 #   --strict-mcp-config  only the servers in .mcp.json load, so nothing else
 #                        configured on this Mac is in reach.
-#   --allowedTools       these five run without asking.
+#   --allowedTools       these ten run without asking.
 #   --disallowedTools    the built-ins are removed from the agent's tool list
 #                        altogether. An allowlist alone only governs approval:
 #                        Bash and Write would still be offered, and a denied
