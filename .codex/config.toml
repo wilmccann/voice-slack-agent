@@ -1,0 +1,11 @@
+[mcp_servers.memo-sheet]
+command = "node"
+args = ["mcp/sheet-server.js"]
+
+[mcp_servers.memo-slack]
+command = "node"
+args = ["mcp/slack-server.js"]
+
+[mcp_servers.memo-trello]
+command = "node"
+args = ["mcp/trello-server.js"]

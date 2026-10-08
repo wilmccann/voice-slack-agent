@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/wilmccann/projects/voice-slack-agent/.codex/hooks/guard-secrets.sh'",
+            "timeout": 10,
+            "statusMessage": "Checking command for secret access"
+          }
+        ]
+      }
+    ]
+  }
+}
